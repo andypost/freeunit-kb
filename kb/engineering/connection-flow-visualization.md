@@ -357,7 +357,7 @@ TCP accept              10 µs                   io_uring ACCEPT (Stage 2)
 HTTP parse              90 µs                   pre-parse header cache
 Route match              5 µs                   route table hash (already fast)
 IPC send (small)        20 µs                   — negligible
-IPC send (5MB upload)  200 µs + memcpy          BWP body streaming (zero memcpy)
+IPC send (5MB upload)  200 µs + memcpy          body streaming (zero memcpy)
 PHP boot (cold)       50 ms × N workers         Prototype + fork (once)
 PHP boot (warm)         0 µs                    — P4 persistent worker
 PHP handler          10–50 ms                   opcache + DB caching

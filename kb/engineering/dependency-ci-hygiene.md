@@ -109,7 +109,7 @@ once per PR push and on release tags; unitctl on master pushes only when its
 paths change; mono and ccache steps removed; ubuntu-26.04 pinned; Fedora
 hardening-strict leg asserts the compiler and OpenSSL versions.
 
-## Verdict on "adopt Mimic's dependency hygiene" (2026-09-16 proposal)
+## Verdict on "adopt the sibling project's dependency hygiene" (2026-09-16 proposal)
 
 - **Already done:** per-component pinned + checksummed contribs, `pkg/eol.json`
   as EOL/audit single source of truth, `cargo audit` over every lock,

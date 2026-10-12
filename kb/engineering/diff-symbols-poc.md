@@ -1,6 +1,6 @@
 # diff-symbols POC — understand code logic through PRs (2026-09-04)
 
-_What the Mimic agent needs to read code faster and EXACTLY: not a full AST
+_What a code-reading agent needs to read code faster and EXACTLY: not a full AST
 index of every file (changes rarely, expensive), but a **diff-symbols** table —
 which symbols each PR touched and WHY. This is language-agnostic (diffs are
 text) and gives evolution, not snapshot — the thing a reviewer actually wants._
@@ -44,7 +44,7 @@ new  = SELECT * FROM gh_cache WHERE pr_id > :last AND repo = :repo;
 -- for each PR: parse diff with tree-sitter, classify delta, INSERT OR REPLACE
 ```
 
-**Mimic queries:**
+**Example queries:**
 - "which PRs changed a function X and why" —
   `SELECT pr_id, pr_title, delta_type, json_extract(meta_json,'$.body') FROM diff_symbols WHERE symbol='X' ORDER BY pr_id DESC`
 - "who else touched this subsystem" — `WHERE file LIKE 'src/db/%' OR symbol LIKE 'DB_%'`

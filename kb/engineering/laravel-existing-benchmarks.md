@@ -30,7 +30,7 @@ Before FreeUnit designs its own Laravel benchmark suite, the team must:
 1. Review existing repos for methodology flaws to avoid repeating them
 2. Understand which scenarios already have solid data
 3. Decide whether a new benchmark suite adds value or just duplicates effort
-4. If new benchmarks are needed, design them to fill gaps (e.g. io_uring vs epoll for Laravel, BWP dispatch, persistent worker memory stability under Laravel load)
+4. If new benchmarks are needed, design them to fill gaps (e.g. io_uring vs epoll for Laravel, datagram dispatch, persistent worker memory stability under Laravel load)
 
 ## Recommendation
 

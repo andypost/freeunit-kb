@@ -75,5 +75,4 @@ Rejected: Wine (no usable AF_UNIX upstream; runs a different toolchain), self-ho
 
 ## Related
 
-- `strategy/freeunit-windows-and-4drupal-repos.md` — the two new repos, their gates and dates
 - `ci-pipeline-balance.md`, `dependency-ci-hygiene.md` — main-repo CI economics and dependency-update hygiene

@@ -88,6 +88,5 @@ Name (Drupal trademark check, decide before M8) · organisation (freeunitorg rec
 
 ## Related
 
-- `strategy/freeunit-windows-and-4drupal-repos.md` — both new repos, gates and the coupling
 - `engineering/windows-port-ci.md` — the companion port's CI design
 - `releases/1.37.1-plan.md` — ask 1: the release that unblocks M6

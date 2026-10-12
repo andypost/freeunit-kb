@@ -8,7 +8,7 @@ updated: "2026-07-20"
 
 # FreeUnit Audit Priority Matrix
 
-**Scope:** FreeUnit v1 (C-core), Buran (Rust), v2 PoC (Rust orchestrator)
+**Scope:** FreeUnit v1 (C-core) and the v2 PoC (Rust orchestrator)
 **Status:** RESEARCHED — actionable tasks below
 **Owner:** andypost / TuzelKO
 

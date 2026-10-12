@@ -27,7 +27,6 @@ tags: [freeunit, repos, github, forks]
 | Repository | Description |
 |------------|-------------|
 | freeunitorg/trueasync-experiment | TrueAsync experiments (v3) |
-| buran-project (Tavern) | Rust app-server ingress; in Mimic context renamed **Tavern** (Buran Application Server). Edge/ingress role; kloaned at `repo-mimic-tavern-temp` |
 
 ## Branch structure of andypost/unit
 

@@ -64,20 +64,20 @@ github.com/rapira-rs/rapira, GitHub org API (public, unauthenticated).
   (vs our event loop), no TLS/HTTP2/3 yet, HTTP-only feature set, young
   (~39★, no plugin parity — "plans to support more RoadRunner plugin
   functions"), Linux/macOS only (Windows via a separate ZTS build).
-- **Its mimicry trick is protocol-level, not engine-level:** Rapira does NOT
-  imitate PHP's engine — it hosts the real Zend. It imitates **php-fpm's
+- **Its compatibility trick is protocol-level, not engine-level:** Rapira does
+  NOT imitate PHP's engine — it hosts the real Zend. It imitates **php-fpm's
   deployment contract** (classic mode = drop-in). FreeUnit's analogue is
   nginx-config/drop-in compatibility.
-- In the Mimic (TuzelKO) ecosystem the corresponding slots are **Tavern**
-  (own accept/queues/protocol, mimic-core in-process) and **mimic-fpm**
-  (FastCGI drop-in for php-fpm); the embeddable engine there is **libmimic**
-  (C ABI, guest-in-a-loop). Direction of mimicry is inverted: Mimic replaces
-  the engine and skins PHP, Rapira keeps the engine and imitates the server.
+- The same split appears across this space: one design owns the
+  accept/queue/protocol path and embeds the engine in process, another is a
+  FastCGI drop-in for php-fpm. The direction of imitation differs — some
+  replace the engine and skin PHP, Rapira keeps the engine and imitates the
+  server.
 
 ## Watch items
 
 - Plugin parity with RoadRunner (queues, metrics, gRPC, hot reload).
-- If HTTP/2, TLS, or a Mimic/other-engine embedding path appears, Rapira
-  becomes the closest structural rival to both FreeUnit and Tavern.
+- If HTTP/2, TLS, or an in-process engine embedding path appears, Rapira
+  becomes the closest structural rival to FreeUnit.
 - Ext-php-rs/Zend embedding is the same technical ground as FreeUnit's
   in-process OPcache/fork work — worth diffing their SAPI choices.

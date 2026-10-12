@@ -34,7 +34,7 @@ that is exactly why it is really 1.37.0 material; see the split note elsewhere.)
 
 | PR | What | Draft? |
 |----|------|--------|
-| **#508** | http: add `body_min_rate` + `send_min_rate` — `body_read_timeout`/`send_timeout` are **gap timers**, so a byte just before each deadline holds a connection forever (slow POST / slow read). `header_read_timeout` is a single budget and is unaffected. **This is the exact gap vs Buran's `min_body_rate`.** | **ready** |
+| **#508** | http: add `body_min_rate` + `send_min_rate` — `body_read_timeout`/`send_timeout` are **gap timers**, so a byte just before each deadline holds a connection forever (slow POST / slow read). `header_read_timeout` is a single budget and is unaffected. **This is the exact gap a `min_body_rate` closes.** | **ready** |
 | **#515** | fix(isolation): unshare the **cgroup namespace after** the cgroup move — with `namespaces.cgroup: true` the app's `/proc/self/cgroup` was rooted at the main process (`0::/scope/python` instead of `0::/`). Containment. | **ready** |
 | **#517** | wasm: check the guest `malloc` result against the **linear memory size** — the guest i32 was sign-extended into `size_t`, moved the host base below linear memory, and the first request wrote the header **out of bounds**. Sandbox memory corruption. | draft |
 | **#520** | regex: cap a pattern's match work at **1,000,000 steps** — `pcre2_match()` ran with no limit; `^/(.*)/(.*)[xy]$` backtracks quadratically → ~167 ms **router CPU per request** on an 8 KiB URI → ReDoS thread stall (and the log echoed the full URI). | draft |
@@ -56,8 +56,7 @@ that is exactly why it is really 1.37.0 material; see the split note elsewhere.)
 
 ## Recommendation
 
-- **Patch now (ready, high value):** **#508** (closes the slow-POST/slow-read hole we
-  traced against Buran) and **#515** (cgroup-ns containment). Both non-draft.
+- **Patch now (ready, high value):** **#508** (closes the slow-POST/slow-read hole) and **#515** (cgroup-ns containment). Both non-draft.
 - **Land before the tag once reviewed:** #517, #520, #521, #522 — all four are
   security/DoS and belong in a patch; they are still drafts, so finishing them is the
   gating step. #521 (rootfs escape) and #517 (wasm OOB) are the most severe.

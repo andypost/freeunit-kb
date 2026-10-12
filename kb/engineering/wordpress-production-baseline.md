@@ -192,7 +192,7 @@ docker run -d --name redis --network wp-network redis:7-alpine
 [ ] MySQL with persistent connection (sql.php: mysql_pconnect)
 [ ] Redis object cache (redis-cache plugin)
 [ ] Static files: served directly by FreeUnit (no nginx needed)
-[ ] TLS: terminate at edge (Caddy / Buran / Cloudflare)
+[ ] TLS: terminate at edge (Caddy / Cloudflare)
 [ ] Graceful shutdown: SIGQUIT configured in systemd/container
 [ ] Health check: GET /wp-admin/admin-ajax.php?action=heartbeat
 [ ] Backup: wp-content + database dump
@@ -215,7 +215,7 @@ docker run -d --name redis --network wp-network redis:7-alpine
 | nginx + php-fpm | 15K | 20ms | ~2GB (32 workers) | restart fpm |
 | FreeUnit | 25K | 10ms | ~250MB (8 workers) | live config reload |
 | nginx + FrankenPHP | 28K | 8ms | ~400MB | restart |
-| Traefik + Buran | 35K | 6ms | ~200MB | live (Buran) |
+| Traefik + edge runtime | 35K | 6ms | ~200MB | live |
 
 FreeUnit wins on RAM efficiency vs FrankenPHP and on operational simplicity
 vs nginx+FPM.

@@ -78,4 +78,3 @@ Watermark tracker cron `a642f89c1e0c` (`15 */6 * * *`, no_agent, deliver = Andre
 
 - `engineering/windows-port-ci.md` — the port's CI design (harness `docs/` and this repo share the same authors' method)
 - `engineering/freeunit4drupal-plan.md` — the Drupal tool whose phase 2 depends on schedules + worker mode (1.38)
-- `strategy/freeunit-windows-and-4drupal-repos.md` — the two research/plan repos and their gates

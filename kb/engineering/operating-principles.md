@@ -19,8 +19,6 @@
 
 **NOT allowed:**
 - Project architecture summaries (→ KB engineering/)
-- Strategic plans, monetization targets (→ KB strategy/)
-- Team attribution, commit counts (→ KB team.md)
 - Codebase stats, benchmark numbers (→ KB engineering/)
 - Release notes, changelogs (→ KB releases/)
 - Roadmap items, KPIs (→ KB v1/ or v2/)
@@ -34,12 +32,10 @@
 **Purpose:** Everything substantive — architecture, statuses, dumps, summaries, comparisons, research.
 
 **Subdirectories:**
-- `engineering/` — Architecture deep-dives, benchmarks, security, protocols, related projects
+- `engineering/` — Architecture deep-dives, benchmarks, security, protocols
 - `v1/` — FreeUnit v1 (C-core) overview, architecture, roadmap, releases
 - `v2/` — FreeUnit v2 (Rust PoC) overview, architecture, liveness, KPIs
-- `strategy/` — Monetization, content plan, open-core models, harness
 - `releases/` — Release announcements (fact-checked)
-- `team.md` — Team structure and attribution
 - `repos.md` — Repository layout and access
 - `history.md` — Project timeline
 - `index.md` — Master index
@@ -51,8 +47,8 @@
 Memory contains **exactly one line** per KB topic — a pointer, not a summary:
 
 ```
-KB: v1/architecture — C-core stats (265k LOC buran, 141k freeunit, ~13k RPS)
-KB: team.md — team attribution and commit counts
+KB: v1/architecture — C-core stats (141k LOC, ~13k RPS)
+KB: repos.md — repository layout and access
 ```
 
 This tells the agent *where to look* without duplicating content. If the KB file is missing or outdated, create/update the KB file — don't expand the memory entry.

@@ -59,7 +59,7 @@ not an escalation — but it is a silent downgrade, and "continues as an unprivi
 
 - pytest cannot mock syscalls; `LD_PRELOAD` cannot intercept `syscall(SYS_capget)` (`src/nxt_capability.c:35-36`); a Docker seccomp
   profile kills runc. Not viable in-suite.
-- Viable: `secexec.c` wrapper in `~/www/freeunit-harness/tools/`: `prctl(PR_SET_NO_NEW_PRIVS)` + `SECCOMP_MODE_FILTER` BPF returning
+- Viable: `secexec.c` wrapper in `tools/` of freeunitorg/freeunit-harness: `prctl(PR_SET_NO_NEW_PRIVS)` + `SECCOMP_MODE_FILTER` BPF returning
   `SECCOMP_RET_ERRNO|<errno>` for `SYS_capget`, errno selectable (EPERM and ENOSYS both exercised), **with** an `AUDIT_ARCH` check
   (compile `SYS_capget` per target; omitting the arch check is unsafe across compat ABIs, not "portable"). Dynamic link is fine; `-static`
   only if the runner lacks the libc.
@@ -97,5 +97,5 @@ not an escalation — but it is a silent downgrade, and "continues as an unprivi
 - [ ] KB row A4 no longer claims Docker default seccomp blocks capget.
 
 ## Agent briefing notes
-opus implements; use `~/www/freeunit-harness` skills/tools for build+test; verify claims in this plan against `origin/master` (local master
+opus implements; use the freeunitorg/freeunit-harness skills and tools for build and test; verify claims in this plan against `origin/master` (local master
 is stale); no git state changes in the shared checkout — work in a worktree.

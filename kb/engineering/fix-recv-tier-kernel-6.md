@@ -385,7 +385,7 @@ to socket. Combined with `splice()` for sendfile equivalent.
 
 ### 6.4+: SINGLE_ISSUER + DEFER_TASKRUN
 
-Not usable in Unit (create ≠ poll thread), but relevant for Buran.
+Not usable in Unit: create is not a poll thread.
 
 ---
 

@@ -28,7 +28,7 @@ resources:
 
 | Feature | Planned | FreeUnit status |
 |---------|---------|-----------------|
-| HTTP/3 (QUIC) | Experimental | Deferred — H2/H3 better served by Buran frontend |
+| HTTP/3 (QUIC) | Experimental | Deferred — H2/H3 better served at the edge |
 | Built-in message queue broker | Blueprint | Not planned (out of scope) |
 | Service Mesh / Sidecar (mTLS, discovery) | Blueprint | Not planned (out of scope) |
 | WASM at the core (serverless) | Basic only | wasmtime 36 (security maintenance) |

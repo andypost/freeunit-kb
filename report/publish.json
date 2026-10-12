@@ -1,17 +1,30 @@
 {
   "_comment": [
-    "Publish policy for the FreeUnit KB site. One file, so the decision is",
-    "reviewable and diffable instead of hidden in the renderer.",
+    "Publish policy for the FreeUnit knowledge base site.",
     "",
-    "areas      which top-level directories are read at all. An area absent",
-    "           from this list is never opened, which is what keeps strategy/",
-    "           and team.md out of the build.",
-    "root_files loose documents at the KB root that are published.",
-    "exclude    slugs dropped after the area check. Two kinds: `slug` for a",
-    "           path, `subject` for a regex over the document text. This is not",
-    "           a denylist that guards the private boundary (that is `areas`);",
-    "           it removes material that is public but off-topic here.",
-    "report_only when true, exclusions are listed and nothing is written."
+    "One file, so the decision is reviewable and diffable rather than hidden",
+    "in the renderer.",
+    "",
+    "areas       which top-level directories are read at all. An area that is",
+    "            not named here is never opened by the build, so strategy/",
+    "            and team.md cannot reach the site even by accident. This is",
+    "            the control that guards the private boundary.",
+    "root_files  loose documents at the knowledge base root that are published.",
+    "exclude     slugs dropped after the area check. Slugs only.",
+    "report_only when true, list what would be published and write nothing.",
+    "",
+    "The tree that this policy reads already contains nothing private and",
+    "nothing off-topic: that is enforced where the files are chosen, not here.",
+    "This file keeps the second line of defence, so that a document reaching",
+    "the tree by mistake still cannot reach the site.",
+    "",
+    "There was once a `subject` rule here that dropped documents mentioning a",
+    "sibling project by counting mentions in the text. It was removed after",
+    "the documents themselves were removed from the tree, which is the",
+    "stronger control: a rule that filters at render time leaves the document",
+    "sitting in a public repository for anyone who reads the source. The",
+    "`subject` mechanism is still implemented in report/render.py and can be",
+    "reinstated in this file if a future case needs it."
   ],
   "areas": {
     "engineering": "concept",
@@ -26,18 +39,6 @@
   "exclude": {
     "slug": [
       "engineering/okf-kb-handover"
-    ],
-    "subject": [
-      {
-        "pattern": "\\b(Buran|Mimic|BWP|bwp-protocol)\\b",
-        "min_hits": 5,
-        "why": "Five or more mentions means the document is about the sibling project rather than about FreeUnit. Measured on the 2026-10-12 snapshot: ten documents at 5 or more, the next one at 4."
-      },
-      {
-        "pattern": "\\b(kb-mimic|mimic-buran)\\b",
-        "min_hits": 1,
-        "why": "A reference to the separate Mimic knowledge root, which is not published here."
-      }
     ]
   },
   "report_only": false

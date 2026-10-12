@@ -77,4 +77,3 @@ Two more facts worth keeping:
 ## Related
 
 - `engineering/http2-in-freeunit.md` — the h2 stack and its staging
-- `strategy/unit-work-process.md` — the TLS stream, its tracks and rules

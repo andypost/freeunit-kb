@@ -57,7 +57,6 @@ When you `apt install freeunit` on Debian Trixie:
 ### 1. Bundled Rust crates (our Cargo.tomls)
 
 We ship these binaries in our Docker images:
-- `buran-router` (OTel binary)
 - `unitctl` (CLI tool)
 - `fake_upstream`, `fake_otlp`, `eol` (testing tools, not in production)
 - `wasm-wasi-component` (WASM runtime)

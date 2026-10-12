@@ -67,13 +67,12 @@ same person now contributing to FreeUnit — Telegram `@Pavlusha2Sniper`, GitHub
 - njs 1.0.0
 - wasmtime 36 (CVE fixes)
 - TrueAsync experimentation
-- BWP protocol research + Buran integration
+- Alternative-dispatch protocol research
 - Roadmap: P4 persistent workers, prototype+fork shared opcache, body streaming
 
-### Adjacent projects (same founder)
+### Adjacent project (same founder)
 | Project | Status |
 |---------|--------|
-| **Buran** | Rust ingress, kernel-arbitrated dispatch, embedded PHP SAPI. v0.2.0. |
 | **freeunit2** | PoC: Rust orchestrator + NTS PHP workers. Complete. |
 
 ### Digest webhook secret handling (2026-09-03)

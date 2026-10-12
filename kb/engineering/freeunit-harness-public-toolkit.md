@@ -81,6 +81,5 @@ stays unremote'd.
 
 ## See also
 
-- [freeunit-harness-ideas](../strategy/freeunit-harness-ideas) — the pre-public idea sketch.
 - `references/gh-identity-plan.md` in the `freeunit-github-ops` skill — the workbench fork, the
   App identity and the credential tooling that this repo's rules now sit beside.

@@ -5,7 +5,7 @@ Kubernetes need TLS and preferably 1.3? Priority: 1.38.
 
 Method: read the tree at `origin/master`, the TLS validation surface, the OpenSSL
 backend, the published docs, and the upstream issue archive. The stream plan
-(`strategy/unit-work-process.md`) owns the sequencing; this file owns the facts.
+A separate stream document owns the sequencing; this file owns the facts.
 
 ## What already exists (evidence)
 
@@ -110,4 +110,3 @@ be inherited; if it is wanted, it is written here.
 - `engineering/tls-module-prototype.md` — W1 prototype, the module interface, ALPN trap
 - `engineering/h3-research.md` — W3 research, the 1.3 coupling from the QUIC side
 - `engineering/release-1.37.1-forecast.md` — 1.38 staging, to place this work
-- `strategy/unit-work-process.md` — the TLS stream, tracks and rules

@@ -347,16 +347,16 @@ With P4: cron worker already warm → immediate hook execution → done
 
 ---
 
-## 6. Buran + FreeUnit + Drupal 12 Architecture
+## 6. Edge runtime + FreeUnit + Drupal 12 Architecture
 
 ### Full stack
 
 ```
 Cloudflare/Akamai CDN (H2/H3)
     │
-    ├── Buran (H2/H3 edge, TLS termination)
+    ├── Edge runtime (H2/H3, TLS termination)
     │      │
-    │      ├── BWP (kernel-arbitrated SOCK_DGRAM)
+    │      ├── Datagram dispatch (kernel-arbitrated)
     │      │
     │      └── FreeUnit P4 (persistent PHP workers)
     │             │

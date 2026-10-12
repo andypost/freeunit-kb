@@ -100,4 +100,4 @@ push from a small script or a pull over SSH; decide when the host has a name.
   quantum metrics
 - `engineering/tls-1.3-and-kubernetes.md` — priority work that also wants the ARM
   stand for its test legs
-- `strategy/unit-work-process.md` — where stand work sits in the stream rules
+- Where stand work sits in the stream rules

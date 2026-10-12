@@ -30,7 +30,6 @@ oha -n 100000 -c 128 --latency-correction \
 ```
 
 Goal: confirm baseline, compare against earlier 128-conn results:
-- Buran: ~198K RPS
 - FreeUnit: ~188K RPS
 - nginx+FPM: ~57K RPS
 
@@ -42,11 +41,10 @@ oha -n 500000 -c 10000 --latency-correction \
 ```
 
 Goal: compare against earlier results:
-- Buran: ~265K RPS
 - FreeUnit: ~141K RPS
 - nginx+FPM: ~13K RPS
 
-### Scenario 3: FreeUnit vs Buran (fresh data)
+### Scenario 3: FreeUnit against a peer runtime (fresh data)
 
 Run BOTH on same instance type, same kernel, same PHP version.
 
@@ -90,7 +88,7 @@ scw instance server create type=DEV1-XL \
 
 # 2. Boot script does:
 #   - apt install build deps
-#   - clone freeunit + buran
+#   - clone freeunit and the peer runtime
 #   - build both
 #   - generate test content
 #   - run oha benchmarks in sequence

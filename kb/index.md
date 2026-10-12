@@ -1,11 +1,3 @@
----
-title: "FreeUnit Knowledge Base"
-description: "Complete knowledge base for FreeUnit — Community LTS fork of NGINX Unit"
-format: "open-knowledge-format-v1"
-updated: "2026-09-16"
-maintainer: "andypost"
----
-
 # FreeUnit Knowledge Base
 
 
@@ -28,22 +20,16 @@ maintainer: "andypost"
 
 
 ### Performance & io_uring
-- [io-uring-ab-benchmark-approach](engineering/io-uring-ab-benchmark-approach) — io_uring A/B benchmarking harness (PR #32)
 - [fix-recv-tier-kernel-6](engineering/fix-recv-tier-kernel-6) — Fixing RECV tier constraints on kernel 6.0+
 - [io-uring-distro-availability](engineering/io-uring-distro-availability) — Per-distro io_uring availability matrix (kernel tier vs distro policy vs container seccomp); RHEL/EL default to `io_uring_disabled=2`, Docker/containerd block `io_uring_setup`; measured EPERM inside our own container
-- [event-loop-alternatives](engineering/event-loop-alternatives) — What to do instead of io_uring: EPOLLEXCLUSIVE/sendfile already present; absent `SO_REUSEPORT`, `recvmmsg`/`sendmmsg`, `MSG_ZEROCOPY`/`TCP_ZEROCOPY_RECEIVE`, `splice`, kTLS; then thread-per-core + BWP kernel dispatch + persistent workers; libuv's own io_uring retreat as the reference point
 - [tls-abstraction-ktls](engineering/tls-abstraction-ktls) — TLS out of the core: current `nxt_tls.h`/`nxt_openssl.c` inventory (vtable already exists), every core→TLS coupling site classified (no direct OpenSSL calls outside the backend; the one `->bundle` reach-through), real OpenSSL/LibreSSL/BoringSSL API drift found in-tree, variant-A multi-backend vtable effort (~2–3 w, wasm-ops precedent, HAProxy/curl precedents), and a kTLS plan (data path at `c->io` swap, sendfile forced OFF under TLS today, `SOL_TLS` per-connection install, SCM_RIGHTS risks); verdict = two tracks, A first
 
 ### Protocol & Architecture
-- [router-threads-and-blocking-io](engineering/router-threads-and-blocking-io) — the router is multi-threaded since 1.33 (`settings.listen_threads`, default ncpu, one shared listening fd, no `SO_REUSEPORT`); parsing cannot wedge an engine, but the request-body spill writes synchronously (`nxt_fd_write`) on the router thread; slow-client state: headers one-shot budget (safe), `body_read_timeout` a gap timer with no rate floor (PR #508), no connection cap; `/status` sums per-engine counters
-- [bwp-protocol-specification](engineering/bwp-protocol-specification) — BWP (Buran Worker Protocol) v1 specification
-- [buran-shared-memory-prototype-fork](engineering/buran-shared-memory-prototype-fork) — Shared opcache/APCu via prototype+fork
 - [connection-flow-visualization](engineering/connection-flow-visualization) — Full HTTP request flow: accept → parse → route → IPC → worker → response
-- [http2-in-freeunit](engineering/http2-in-freeunit) — HTTP/2 in the C core: PRs #458/#459 (phase 0), #463 (stage 1, nghttp2 over TLS/ALPN), #467 (stage 2); cost vs the KB estimate, the nghttp2 build-dependency decision, D3 tension, gaps; sequenced **last** in the wave
 - [pr-wave-438-469-merge-plan](engineering/pr-wave-438-469-merge-plan) — ordered merge plan for the #443 wave (#438–#469): phases, stacked dependencies, the open UAF/lifetime cluster (#414/#415/#425/#455/#464/#465), and the decisions to settle before merging
 - [opencode-free-tracking](engineering/opencode-free-tracking) — OpenCode Free tier: keyless access, per-model limits, profile accumulator, zen-quorum
 - [zen-quorum-wasm-stop-the-rest-of-the-request-path](engineering/zen-quorum-wasm-stop-the-rest-of-the-request-path) — quorum on PR #320 (wasm abort follow-up): blind-run artifact vs fixed run, SPOT ground truth, APPROVE with non-blocking notes
-- [evolver-reference](engineering/evolver-reference) — tree-sitter→symbols→SQLite pattern for cross-version code analysis (vs vector); replicate for unit/Mimic
+- [evolver-reference](engineering/evolver-reference) — tree-sitter→symbols→SQLite pattern for cross-version code analysis, instead of semantic or vector search
 - [diff-symbols-poc](engineering/diff-symbols-poc) — understand code logic via PR diffs (diff_symbols table, watermark fill, rename tracking); POC on unit commit 73cc8cc8
 - [gh-archive-tool](engineering/gh-archive-tool) — tools/gh_archive.py: one-shot bulk dump of a repo's issues/PRs/comments into JSONL + FTS5 sqlite for zero-API offline search; nginx/unit archived (1554 items, 2017→2025) fully dumped
 - [unit-archive-acme-cron-survey](engineering/unit-archive-acme-cron-survey) — six-theme sweep of the full unit archive (ACME #424, PUT-overwrite #195, mTLS #225/#547, scheduler #1528 rejected, peer-cred ancestor #307, ECDSA #358); X10 is upstream-rejected, not catch-up
@@ -58,41 +44,27 @@ maintainer: "andypost"
 - [zen-review-pr-294](engineering/zen-review-pr-294) — pkg(eol) Ubuntu/Debian EOL sync + Debian LTS field mapping; data/docs, APPROVE
 - [zen-review-pr-265](engineering/zen-review-pr-265) — PHP automount.language_deps mounts (tzdb rootfs SIGSEGV); MERGED; tz-probe fallback to /usr/share/zoneinfo, "-\-refusal (JSON %s serializer), quorum→tool-verified
 - [zen-review-pr-254](engineering/zen-review-pr-254) — capget keep-running when filtered + drop capabilities (ERRNO-narrow, NXT_DECLINED split, merlist still_held); MERGED, security P0
-- [zen-review-pr-298](engineering/zen-review-pr-298) — review follow-ups to bodyless upstream: &r->task ptr, static is_bodyless, port-registry row; mechanical APPROVE
-- [zen-review-pr-299](engineering/zen-review-pr-299) — listener-close-before-ack regression test for #276; anchored on close(2), MERGED (+P2 resolved: test_configuration in --debug sanitize leg)
-- [zen-review-pr-301](engineering/zen-review-pr-301) — discovery escape module list as JSON via nxt_conf (%s-serializer broke parse); +parse-fail alerts (main_process), MERGED
 - [zen-review-pr-290](engineering/zen-review-pr-290) — main state-store atomic (tmp→fsync→rename→dir-sync, fail deletes tmp); fixes data-loss #215, MERGED (test: 64KiB tmpfs)
 - [zen-review-pr-291](engineering/zen-review-pr-291) — refuse MSG_CTRUNC (SCM_RIGHTS cut) cross-language; APPROVE + P1-risk follow-up (trunc-path diverges from recheck-handoff nxt_port_socket.c:959)
-- [zen-review-pr-304](engineering/zen-review-pr-304) — keep access-log values inside UTF-8 (nxt_utf8_sanitize at log sink, NOT escaper — zero config blast radius) + refuse surrogates in utf8_decode2; MERGED, per-byte (not max-subpart), escaper untouched
-- [zen-review-pr-302](engineering/zen-review-pr-302) — runtime pid-file short-write resume (offset=written, alert on n==0); follow-up to #290, MERGED
-- [zen-review-pr-303](engineering/zen-review-pr-303) — string: NULL + zero-length mem* guards (nxt_cpymem/nxt_strstr_eq/nxt_is_tstr); closes #200-code, MERGED
-- [zen-review-pr-307](engineering/zen-review-pr-307) — harness fix: wait for workers gone before deleting temp_dir (java late-start alert); read log tail after teardown so alert ≠ next test; MERGED
-- [zen-review-pr-284](engineering/zen-review-pr-284) — access log object-format per-member (log-injection); depends on #304 for full guarantee, MERGED
 - [zen-review-pr-280](engineering/zen-review-pr-280) — optional limits.start_timeout on app start; timer-vs-reply via payload-completion, idempotent armed/expired; MERGED
 - [utf8-encoding-contracts](engineering/utf8-encoding-contracts) — P0-P7 plan: three encoding contracts (opaque/UTF8-reject/UTF8-substitute); #304 should be reworked→P2 sanitizer at log sink, not escaper; B0 wasm abort
 - [php-phar-history-vulns](engineering/php-phar-history-vulns) — php-src phar 5yr: security-class (symlink-cycle/UAF/leak), `phar_get_link_source` two-generation patches (Floyd vs depth), `zend_string*` refactor removes UAF-class, behavioral `.phar`-only auto-detect
-- [zen-review-pr-289](engineering/zen-review-pr-289) — authenticate prototype's START_PROCESS (sender-pid, 2 arms: global-pid / ns-0) + retire start stream on reply; security MERGED (fixes #270/#271)
 - [zen-review-pr-282](engineering/zen-review-pr-282) — compression shm leak (nxt_buf_free skipped completion_handler); chain walk, MERGED
 - [zen-review-pr-288](engineering/zen-review-pr-288) — prototype-death stranding START_PROCESS RPC (no peer); _ex_set_peer one-line fix, APPROVE
 - [zen-review-pr-295](engineering/zen-review-pr-295) — proxy bodyless upstream (HEAD/204/304 completed on headers); is_bodyless_final split, MERGED; +buf_mem_hold (pool cleanup releases retain, keeps fields valid)
 - [zen-review-pr-296](engineering/zen-review-pr-296) — prototype-kill test skip-outside-window guard + pid#tid regex fix; test-robustness, MERGED
 - [zen-review-pr-279](engineering/zen-review-pr-279) — isolation reject rootfs+credential-ns w/o mount-ns (config-time kernel invariant); MERGED; validator declares-not-stats (euid-distinct), names the automount knob
 - [zen-review-architecture](engineering/zen-review-architecture) — zen_review.py + gh_cache.py: entity-sliced review (issue/pr/commit), script vs agent, local GitHub/GitLab cache with watermark delta
-- [opencode-free-tracking](engineering/opencode-free-tracking) — keyless OpenCode Free tier ground truth; **2026-10-03: tier now client-gated (403 "can only be used from within OpenCode") — only space-bunny-free still answers keyless**
 - [refusal-aware-model-bench](engineering/refusal-aware-model-bench) — refusal/fallback taxonomy (REFUSAL vs EMPTY-LENGTH budget artifact vs ANALYSIS-NO-PATCH) + framing ladder (review→exploit→patch) for security-adjacent code tasks; vendor KCB 2.0 disclosure vs what we can measure; live finding: the one empty answer was budget exhaustion, not a refusal
 
 ### PHP & Drupal
-- [octane-roadrunner-frankenphp-research](engineering/octane-roadrunner-frankenphp-research) — Persistent-worker landscape: Octane, RoadRunner, FrankenPHP
 - [roadrunner-v3-jobs-vs-freeunit-schedules](engineering/roadrunner-v3-jobs-vs-freeunit-schedules) — RoadRunner v3.0.0 `jobs` (broker-fed **queue**) vs FreeUnit `schedules` (#452, in-process **timer**): different axes; RR v3 ships **no scheduler**; overlap is only named worker pools + outcome metrics/tracing
 - [drupal12-symfony-runtime-persistent-workers](engineering/drupal12-symfony-runtime-persistent-workers) — Drupal 12 + Symfony Runtime for persistent workers
-- [drupalcon-bof-plan](engineering/drupalcon-bof-plan) — DrupalCon BoF plan (Sep 2026) — **aspirational: non-existent CLI/YAML/worktree demos; do not quote**; grounded replacement: [strategy/drupalcon-rotterdam-2026-promotion-plan](strategy/drupalcon-rotterdam-2026-promotion-plan)
 
 
 ### Security
 - [port-message-trust-model](engineering/port-message-trust-model) — #341 classified: no sender ACL in the router's dispatcher, what IS gated (main/prototype/cert/script/socket/access-log), `.restart = 1` caps a forged QUIT at one teardown, and the wording to use in public
 - [port-frag-eviction-and-convergence](engineering/port-frag-eviction-and-convergence) — #447's 64-stream cap is bypassable (no **time** bound → hold slots forever); fix = timeout eviction (+ optional evict-oldest) and/or refuse fragments from untrusted senders; falsifiable exit criteria (count+bytes+**time** bound, read-once, sender auth) for the "untrusted SHM" class
-- [buran-vs-freeunit-frag-hardening](engineering/buran-vs-freeunit-frag-hardening) — how Buran avoids the class by construction (no peer-writable SHM: atomic SOCK_DGRAM + framed stream); where it reassembles (WebSocket) it bounds by `max_message_size` + `idle_timeout` and never trusts a declared length; the bounds map 1:1 onto #446/#447/#448/#505, and Buran adds the two **time** bounds FreeUnit still lacks (idle timeout, `min_rate`)
-- [test-port-strategy-freeunit-vs-buran](engineering/test-port-strategy-freeunit-vs-buran) — why FreeUnit's suite needs a port-remap layer (#406) for parallel runs, and how Buran sidesteps it by binding `127.0.0.1:0`
 - [seccomp-isolation-plan-summary](engineering/seccomp-isolation-plan-summary) — Seccomp / Docker profile / isolation collission analysis
 - [release-1.36.0-what-we-fixed](engineering/release-1.36.0-what-we-fixed) — Full accounting of 38+ fixes in 1.36.0 by category
 - [release-1.36.2-pending-includes](engineering/release-1.36.2-pending-includes) — triage of the #500+ wave for the pending 1.36.2: security/DoS patch-worthy (#508 min-rate, #515 cgroup-ns, #517 wasm OOB, #520 ReDoS, #521 rootfs symlink escape, #522 WS ping flood), bugfix (#518 leak, #519 rpc-stream-0), feature (#523/#516 async state store)
@@ -148,4 +120,45 @@ maintainer: "andypost"
 
 
 - [operating-principles](engineering/operating-principles) — Memory vs KB separation rule (Andrey)
-- [okf-kb-handover](engineering/okf-kb-handover) — Briefing to hand the OKF KB to another Hermes agent: layout, conventions, read/write workflows, measured integrity (142 docs / 679 edges; 11 dangling index links, 35 unindexed files → index is an entry point, not a manifest), tiered file handover list (A bootstrap / B project context / C topical / D tooling)
+
+## Engineering
+
+- [engineering/663-662-libunit-wakeup-and-654-597-status](engineering/663-662-libunit-wakeup-and-654-597-status) — the libunit wake-up that can block at quit (with #654/#597 status). Chain at master:
+- [engineering/aports-andypost-mr-activity](engineering/aports-andypost-mr-activity) — andypost — aports GitLab MR activity (2026-09-03). Author andypost on gitlab.alpinelinux.org/alpine/aports.
+- [engineering/ci-pipeline-balance](engineering/ci-pipeline-balance) — CI pipeline balance — FreeUnit "Build & Test (Linux)". Measured 2026-09-15 over the last 10 completed runs of the workflow (per-leg medians, jobs API:
+- [engineering/ci-pipeline-speedup-pr507](engineering/ci-pipeline-speedup-pr507) — Build & Test pipeline speedups (PR #507). Reviewed at head cc4df8ea4442 (ci/speedup-pipeline), 2026-09-27.
+- [engineering/freeunit-satellite-repos-2026-10](engineering/freeunit-satellite-repos-2026-10) — FreeUnit satellite repos (created 2026-10-10): harness, benchmarks-drupal, research, freeunit-exp. Read 2026-10-11.
+- [engineering/freeunit4drupal-plan](engineering/freeunit4drupal-plan) — freeunit4drupal — plan and the FreeUnit-side asks. Read 2026-10-07 from freeunitorg/freeunit4drupal at 9dd42318 (default branch main).
+- [engineering/hardening-configure-pr444](engineering/hardening-configure-pr444) — --hardening: configure mechanics and measured behaviour (PR #444). Reviewed at head 3bb54805f22e (build/hardening), 2026-09-26.
+- [engineering/http-request-fields-server-name](engineering/http-request-fields-server-name) — HOST, server_name, local_addr — what the router hands an application. Verified against master and the java-server-name-ipv6 branch, 2026-09-12.
+- [engineering/http-te-framing-pr485](engineering/http-te-framing-pr485) — Transfer-Encoding framing on the proxy path (PR #485). Reviewed at head 7faf46b4782e (fix/proxy-peer-transfer-encoding), 2026-09-26.
+- [engineering/ipc-ports-architecture](engineering/ipc-ports-architecture) — FreeUnit IPC Ports — Architecture Reference. Shared segment (nxtportmemory.c) with chunks — the router↔worker data path.
+- [engineering/issue-323-php-share-quorum](engineering/issue-323-php-share-quorum) — freeunit#323 — `.php` in the built-in MIME table vs a mis-ordered `share`. Quorum run 2026-09-12 (keyless OpenCode Free tier) + my own code pass.
+- [engineering/language-module-security-responsibility](engineering/language-module-security-responsibility) — Language Module Security — Who Is Responsible. FreeUnit supports 8 language runtimes.
+- [engineering/laravel-existing-benchmarks](engineering/laravel-existing-benchmarks) — Existing Laravel Benchmarks — Study Before Proposing New Ones. Before FreeUnit designs its own Laravel benchmark suite, the team must:
+- [engineering/mime-php-share-history](engineering/mime-php-share-history) — History: the `.php` MIME entry, the case-sensitive uri rule, and the share exposure. Traced 2026-09-13 from local clones (fork history carries upstream) + the GitHub API for the archived nginx/unit and nginx/unit-docs.
+- [engineering/nxt-tests-hooks-pr413](engineering/nxt-tests-hooks-pr413) — NXT_TESTS hooks: per-object macro in two archives (PR #413). Reviewed at head 75610082fd14 (build/one-pass-test-archive), 2026-09-26.
+- [engineering/opencode-free-model-probe](engineering/opencode-free-model-probe) — OpenCode Free tier — model capability probe (2026-09-03)
+- [engineering/rapira-rs-php-server-notes](engineering/rapira-rs-php-server-notes) — Rapira (rapira.rs) — competitor notes (FreeUnit landscape). PHP application server written in Rust, MIT, public since 2026-07-26.
+- [engineering/scaleway-benchmark-plan](engineering/scaleway-benchmark-plan) — Scaleway Benchmark Plan. Run BOTH on same instance type, same kernel, same PHP version.
+- [engineering/security-scanning-responsibility](engineering/security-scanning-responsibility) — Security Scanning: Who Is Responsible For What. Does FreeUnit need to scan Go/Rust/PHP dependencies for CVEs, or is that the distribution's job?
+- [engineering/windows-port-ci](engineering/windows-port-ci) — Windows port — CI design (freeunit-windows, from docs/plan.md D16 + research §3). Read 2026-10-07 from freeunitorg/freeunit-windows at 5b7b078.
+- [engineering/wordpress-production-baseline](engineering/wordpress-production-baseline) — WordPress + FreeUnit — Production Baseline. WordPress is 43% of the web.
+- [engineering/zen-quality-compare](engineering/zen-quality-compare) — zen-quality: full-toolset vs limited-toolset review comparison (2026-09-03). Task under test:
+- [engineering/zen-quorum-323-case-guard-decision](engineering/zen-quorum-323-case-guard-decision) — zen-quorum — #323 durable-fix decision (case-sensitive `*.php` guard vs unfiltered `share`). Which durable fix for a case-sensitive .php route guard in front of an unfiltered share? Options:
+- [engineering/zen-quorum-aports-gcc-internal](engineering/zen-quorum-aports-gcc-internal) — zen-quorum: aports gcc 16.2.0 MR — internal patch review (2026-09-03). Independently confirmed the patch-prune via grepinfile on the MR diff:
+- [engineering/zen-quorum-aports-gcc-mr](engineering/zen-quorum-aports-gcc-mr) — zen-quorum: aports gcc MR (main/gcc 16.2.0) — 2026-09-03. Author andypost — Draft MR.
+- [engineering/zen-quorum-capability-keep-running-when-capget-is-f](engineering/zen-quorum-capability-keep-running-when-capget-is-f) — zen-quorum: PR #254 — capability: keep running when capget() is filtered. Unit now warns and continues, assuming no capability.
+- [engineering/zen-quorum-capget-decision](engineering/zen-quorum-capget-decision) — zen-quorum: FreeUnit capget-blokkature decision (2026-09-03). gathered keyless OpenCode Free tier · task = choose among real options on the capget chain
+- [engineering/zen-quorum-pr-254](engineering/zen-quorum-pr-254) — zen-quorum: PR #254 — capability: keep running when capget() is filtered. Unit now warns and continues, assuming no capability.
+- [engineering/zen-quorum-pr-266](engineering/zen-quorum-pr-266) — zen-quorum: PR #266 — test(tls): stop asserting that a session resumes in the same instant. Fixes the flakes tracked in #51, which has been open since 1.35.4 with "restarted now" as the only response.
+- [engineering/zen-quorum-test-tls-stop-asserting-that-a-session-r](engineering/zen-quorum-test-tls-stop-asserting-that-a-session-r) — zen-quorum: PR #266 — test(tls): stop asserting that a session resumes in the same instant. Fixes the flakes tracked in #51, which has been open since 1.35.4 with "restarted now" as the only response.
+- [engineering/zen-quorum-utf8-drop-the-unused-case-folding-machin](engineering/zen-quorum-utf8-drop-the-unused-case-folding-machin) — zen-quorum: PR #314 — utf8: drop the unused case-folding machinery. The cost of keeping it is not zero.
+- [engineering/zen-review-commit-7311ab674426](engineering/zen-review-commit-7311ab674426) — zen-review history — commit 7311ab674426
+
+## Releases
+
+- [releases/1.37.1-gate-report](releases/1.37.1-gate-report) — FreeUnit 1.37.1 — pre-tag gate report and analysis of the assembled content. 7 PRs, 16 commits, 24 files, +1544/−198 (git diff --shortstat origin/master..rp/train).
+- [releases/1.37.1-plan](releases/1.37.1-plan) — FreeUnit 1.37.1 — release plan. master tip 47d2f933 (2026-10-04) — the only commit past 1.37.0 is "changelog:
+- [releases/1.37.1-polish-and-changelog-cleanup](releases/1.37.1-polish-and-changelog-cleanup) — FreeUnit 1.37.1 — polish list and the changelog clean-up, drafted. Decision recorded 2026-10-11:
+- [releases/1.37.1-quorum-and-options](releases/1.37.1-quorum-and-options) — FreeUnit 1.37.1 — deeper options study + model quorum record. 2026-10-11, same day as the gate report.

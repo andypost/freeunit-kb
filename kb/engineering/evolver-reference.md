@@ -3,7 +3,7 @@
 _2026-09-04. Reference project: how to make code reading FAST and PRECISE via
 tree-sitter → symbols → SQLite, instead of semantic/vector search. This is the
 pattern to replicate for FreeUnit (C), unitctl, and php-src — and it is what the
-Mimic agent should use to read code faster/more exactly than context guessing._
+reference for reading code faster and more exactly than context guessing._
 
 ## What Evolver is
 
@@ -82,7 +82,7 @@ CREATE INDEX idx_sym_parent     ON symbols(parent_symbol) WHERE parent_symbol IS
 ## In KB context
 
 Replaces the "Qdrant for code" non-starter with an exact-symbol pipeline. Used by:
-- Mimic agent → read code faster/exactly (index unit + php-src symbols, query by fqn).
+- an agent reading code → faster and more exactly (index unit + php-src symbols, query by fqn).
 - FreeUnit → cross-version breaking-change detection (Drupal-style diff).
 - Sofar we verified the PYTHON path works: `tree-sitter-c` parses unit (1935 defs /
   1605 calls in 0.9s), error-tolerant vs pycparser's 0/141.
