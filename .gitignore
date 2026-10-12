@@ -1,0 +1,10 @@
+# Build output.  Regenerate with report/render.py; never commit it.
+/public/
+
+# The renderer's own progress record.  It describes one machine's interrupted
+# build, not the knowledge base.
+.build-state.json
+
+__pycache__/
+*.pyc
+/plan.json

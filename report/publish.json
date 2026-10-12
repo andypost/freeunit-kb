@@ -1,0 +1,44 @@
+{
+  "_comment": [
+    "Publish policy for the FreeUnit KB site. One file, so the decision is",
+    "reviewable and diffable instead of hidden in the renderer.",
+    "",
+    "areas      which top-level directories are read at all. An area absent",
+    "           from this list is never opened, which is what keeps strategy/",
+    "           and team.md out of the build.",
+    "root_files loose documents at the KB root that are published.",
+    "exclude    slugs dropped after the area check. Two kinds: `slug` for a",
+    "           path, `subject` for a regex over the document text. This is not",
+    "           a denylist that guards the private boundary (that is `areas`);",
+    "           it removes material that is public but off-topic here.",
+    "report_only when true, exclusions are listed and nothing is written."
+  ],
+  "areas": {
+    "engineering": "concept",
+    "releases": "release",
+    "v1": "concept",
+    "v2": "concept"
+  },
+  "root_files": {
+    "history": "history",
+    "repos": "reference"
+  },
+  "exclude": {
+    "slug": [
+      "engineering/okf-kb-handover"
+    ],
+    "subject": [
+      {
+        "pattern": "\\b(Buran|Mimic|BWP|bwp-protocol)\\b",
+        "min_hits": 5,
+        "why": "Five or more mentions means the document is about the sibling project rather than about FreeUnit. Measured on the 2026-10-12 snapshot: ten documents at 5 or more, the next one at 4."
+      },
+      {
+        "pattern": "\\b(kb-mimic|mimic-buran)\\b",
+        "min_hits": 1,
+        "why": "A reference to the separate Mimic knowledge root, which is not published here."
+      }
+    ]
+  },
+  "report_only": false
+}

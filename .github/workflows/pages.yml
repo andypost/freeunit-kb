@@ -1,0 +1,81 @@
+name: pages
+
+# Renders kb/ into a static site and publishes it to gh-pages.  Same shape as
+# freeunitorg/benchmarks-drupal: a render step, then peaceiris/actions-gh-pages
+# with force_orphan so the published branch holds one commit and no history of
+# previous builds.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  render:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Render the site
+        run: |
+          # The build is written to be sliced because a single invocation is
+          # not always allowed to finish: --limit renders at most that many
+          # pages and records progress in public/.build-state.json, so a later
+          # run resumes instead of starting over.  The loop runs until the
+          # renderer reports the build complete.
+          set -eu
+          for attempt in $(seq 1 20); do
+            python3 report/render.py kb public --base=/${{ github.event.repository.name }}/ \
+              --limit=40 2>&1 | tee /tmp/render.log
+            if grep -q 'render: complete' /tmp/render.log; then
+              echo "rendered on attempt $attempt"
+              break
+            fi
+            sleep 1
+          done
+
+      - name: Fail unless the build completed
+        run: |
+          # A partial site is worse than no site: it publishes a search index
+          # that disagrees with the pages, or no index at all.
+          test -f public/search.json
+          test -f public/index.html
+          python3 - <<'PY'
+          import json, os, sys
+          index = json.load(open('public/search.json'))
+          missing = [d['url'] for d in index['docs'] if not os.path.exists(os.path.join('public', d['url']))]
+          if missing:
+              sys.exit(f"{len(missing)} indexed urls have no page: {missing[:3]}")
+          print(f"{len(index['docs'])} documents, {len(index['vocabulary'])} terms, every url present")
+          PY
+
+      - name: Fail if a withheld document reached the site
+        run: |
+          # The exclusions are the reason this repository is safe to publish.
+          # Check them here rather than trusting the renderer's report.
+          set -eu
+          python3 - <<'PY'
+          import json, subprocess, sys
+          policy = json.load(open('report/publish.json'))
+          slugs = policy.get('exclude', {}).get('slug', [])
+          bad = []
+          for slug in slugs:
+              hit = subprocess.run(['grep', '-rlF', slug, 'public'],
+                                   capture_output=True, text=True)
+              if hit.stdout.strip():
+                  bad.append(slug)
+          if bad:
+              sys.exit(f"withheld documents present in the build: {bad}")
+          print(f"{len(slugs)} excluded slugs absent from the build")
+          PY
+
+      - name: Publish to gh-pages
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./public
+          publish_branch: gh-pages
+          force_orphan: true
