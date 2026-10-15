@@ -127,6 +127,7 @@
 - [engineering/aports-andypost-mr-activity](engineering/aports-andypost-mr-activity) — andypost — aports GitLab MR activity (2026-09-03). Author andypost on gitlab.alpinelinux.org/alpine/aports.
 - [engineering/ci-pipeline-balance](engineering/ci-pipeline-balance) — CI pipeline balance — FreeUnit "Build & Test (Linux)". Measured 2026-09-15 over the last 10 completed runs of the workflow (per-leg medians, jobs API:
 - [engineering/ci-pipeline-speedup-pr507](engineering/ci-pipeline-speedup-pr507) — Build & Test pipeline speedups (PR #507). Reviewed at head cc4df8ea4442 (ci/speedup-pipeline), 2026-09-27.
+- [engineering/dsh-web-and-headless](engineering/dsh-web-and-headless) — DeepSeek Harness (dsh): the shared core behind every surface, the interactive web surface, the one-shot headless surface, credentials, permissions, deployment, and the dsh session parser
 - [engineering/freeunit-satellite-repos-2026-10](engineering/freeunit-satellite-repos-2026-10) — FreeUnit satellite repos (created 2026-10-10): harness, benchmarks-drupal, research, freeunit-exp. Read 2026-10-11.
 - [engineering/freeunit4drupal-plan](engineering/freeunit4drupal-plan) — freeunit4drupal — plan and the FreeUnit-side asks. Read 2026-10-07 from freeunitorg/freeunit4drupal at 9dd42318 (default branch main).
 - [engineering/hardening-configure-pr444](engineering/hardening-configure-pr444) — --hardening: configure mechanics and measured behaviour (PR #444). Reviewed at head 3bb54805f22e (build/hardening), 2026-09-26.
