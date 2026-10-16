@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>engineering/artisan-worker-stubs</title>
+<link rel="stylesheet" href="/freeunit-kb/assets/kb.css">
+</head><body>
+<nav class="crumbs"><a href="/freeunit-kb/index.html">index</a> / engineering/artisan-worker-stubs</nav>
+
+<h1>engineering/artisan-worker-stubs</h1>
+<table class="meta"><tr><th>date</th><td>2026-09-11 · <strong>Status:</strong> built + tested live on running unitd 1.36.1</td></tr><tr><th>tools</th><td><code>tools/artisan_stubs/worker_core.py</code>, <code>tools/artisan_stubs/gen_stubs.py</code></td></tr></table>
+<h1>Artisan/worker stubs for FreeUnit — generator + live proof</h1>
+<p><strong>Date:</strong> 2026-09-11 · <strong>Status:</strong> built + tested live on running unitd 1.36.1 <strong>Tools:</strong> <code>tools/artisan_stubs/worker_core.py</code>, <code>tools/artisan_stubs/gen_stubs.py</code></p>
+<h2>Goal</h2>
+<p>Run long-lived Laravel artisan commands (<code>queue:work</code>, <code>schedule:work</code>, <code>horizon</code>, …) inside Unit's runtime — one tiny <strong>stub per artisan command</strong>, without patching PHP or the artisan command itself.</p>
+<h2>Decisive finding: the stub language must be Python, not PHP</h2>
+<p>Verified against the shipped <code>php84.unit.so</code>:</p>
+<table><thead><tr><th>Runtime</th><th>Boot hook?</th><th>Consequence</th></tr></thead><tbody><tr><td><strong>Python (ASGI)</strong></td><td>✅ <code>lifespan.startup</code></td><td>a Python app can spawn+supervise a child at boot</td></tr><tr><td><strong>PHP SAPI</strong></td><td>❌ request-driven only; <strong>TrueAsync not compiled</strong> (<code>async</code> config rejected, no <code><em>true_async</em></code> symbols in the .so)</td><td>a PHP app <strong>cannot</strong> self-host a long-lived worker</td></tr></tbody></table>
+<p>→ So the <strong>supervisor is Python</strong>; the artisan process is its <strong>child</strong>. This is cryptographically the same trick as the X10 job-shim, now productised per-command.</p>
+<h2>What was built</h2>
+<ol><li><strong><code>worker_core.py</code></strong> — one shared ASGI app factory. <code>lifespan.startup</code> starts</li></ol>
+<p><code>_supervise(command)</code> (spawn + restart-on-exit with backoff); <code>lifespan.shutdown</code> cancels and kills children. The command can be <strong>any binary</strong> (PHP, Python, …).</p>
+<ol><li><strong><code>gen_stubs.py</code></strong> — for each artisan command emits:</li><li><code>&lt;name&gt;.py</code> (3 lines: import core, <code>make_application("php artisan &lt;cmd&gt;")</code>);</li><li>a Unit config fragment (<code>type: python</code>, <code>spare: 1</code>, <code>idle_timeout: 0</code>).</li></ol>
+<h2>Live test (running unitd, PHP 8.4.25 + Python 3.14.7)</h2>
+<ul><li>Generated stubs for <code>queue:work --tries=3</code> and <code>schedule:work</code> (with a fake</li></ul>
+<p>artisan logger as the command).</p>
+<ul><li>Applied via Control API → <code>{"success": "Reconfiguration done."}</code>.</li><li>Observed in <code>artisan.out</code>: <strong>START/EXIT pairs repeating — 2 restarts each</strong>,</li></ul>
+<p>i.e. supervision + restart works for both workers simultaneously.</p>
+<ul><li>Added health listeners 8805/8806 → <code>{"worker":"... artisan queue:work ..."}</code>.</li></ul>
+<h2>Required config (the one gotcha)</h2>
+<pre><code class="language-json">&quot;applications&quot;: {
+  &quot;queue_work&quot;: {
+    &quot;type&quot;: &quot;python&quot;, &quot;path&quot;: &quot;&lt;stubs dir&gt;&quot;,
+    &quot;module&quot;: &quot;queue_work&quot;, &quot;callable&quot;: &quot;application&quot;,
+    &quot;processes&quot;: { &quot;spare&quot;: 1, &quot;idle_timeout&quot;: 0 }
+  }
+}</code></pre>
+<ul><li><strong><code>spare: 1</code></strong> — start eagerly (a worker serves no requests; lazy start would</li></ul>
+<p>never fire without a listener).</p>
+<ul><li><strong><code>idle_timeout: 0</code></strong> — defeat the router's 15 s idle reaper, else the worker</li></ul>
+<p>is QUIT'd 15 s after boot. (Both nested under <code>processes</code>, not top-level.)</p>
+<h2>Usage</h2>
+<pre><code class="language-sh">python3 tools/artisan_stubs/gen_stubs.py \
+    --out /srv/artisan-stubs --config /srv/artisan-unit.json \
+    --php-bin /usr/bin/php \
+    --commands &quot;queue:work --tries=3&quot; &quot;schedule:work&quot; &quot;horizon&quot;
+# then merge the fragment under &quot;applications&quot; and PUT to /config</code></pre>
+<h2>Caveats / next</h2>
+<ul><li>Stub module names are sanitised to valid Python identifiers (<code>--tries=3</code> →</li></ul>
+<p><code>_tries_3</code>), else the loader can't import them.</p>
+<ul><li>One worker process per app; scale with <code>processes</code>/<code>spare</code> (multiple workers).</li><li>Production: close libunit fds to the child (spike <code>execve</code>s without it).</li><li>This is the concrete "for each artisan" form of the X10 primitive — pairs with</li></ul>
+<p>the <code>/run</code> one-shot primitive and the ACME app (<code>x10-job-shim-spike.md</code>).</p>
+<script src="/freeunit-kb/assets/kb.js"></script>
+</body></html>

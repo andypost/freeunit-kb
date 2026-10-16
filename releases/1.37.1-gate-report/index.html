@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>releases/1.37.1-gate-report</title>
+<link rel="stylesheet" href="/freeunit-kb/assets/kb.css">
+</head><body>
+<nav class="crumbs"><a href="/freeunit-kb/index.html">index</a> / releases/1.37.1-gate-report</nav>
+
+<h1>releases/1.37.1-gate-report</h1>
+
+<h1>FreeUnit 1.37.1 — pre-tag gate report and analysis of the assembled content</h1>
+<p>_2026-10-11. Scope: the rehearsed merge train (<code>rehearse-1371c</code>, head <code>c9a81ad3</code>) on base <code>4fef769d</code> (master, 96 commits past tag <code>1.37.0</code>). Every number below came from a command run against that tree; the commands are named inline._</p>
+<h2>1. What the assembled content is</h2>
+<p>7 PRs, 16 commits, 24 files, +1544/−198 (<code>git diff --shortstat origin/master..rp/train</code>). The 1.37.1 CHANGES section carries <strong>25 entries — 23 <code>Bugfix:</code> + 2 <code>Change:</code></strong>; <code>docs/changes.xml</code> parses with <strong>24</strong> unit <code>&lt;change&gt;</code> entries.</p>
+<table><thead><tr><th>PR</th><th>Files</th><th>Tests it brings</th><th>CHANGES entry</th></tr></thead><tbody><tr><td>#659</td><td><code>src/nxt_lib.c</code>, <code>src/nxt_main.h</code></td><td><code>src/test/nxt_cpu_limit_test.c</code> (new C test)</td><td>yes</td></tr><tr><td>#664</td><td><code>auto/os/conf</code>, <code>src/nxt_unix.h</code></td><td>build-level (no test)</td><td>yes</td></tr><tr><td>#670</td><td><code>src/nxt_router.c</code></td><td><code>test/python/compression_stream/wsgi.py</code>, <code>test/test_python_compression.py</code></td><td><strong>no — owed</strong></td></tr><tr><td>#671</td><td><code>src/nxt_router.[ch]</code>, <code>auto/sources</code></td><td><code>src/test/nxt_router_engine_port_test.c</code> (new)</td><td><strong>no — owed</strong></td></tr><tr><td>#672</td><td><code>src/nxt_router*</code>, <code>src/nxt_unit.[ch]</code></td><td><code>src/test/nxt_router_app_timeout_test.c</code>, <code>src/test/nxt_unit_msg_test.c</code></td><td><strong>no — owed</strong></td></tr><tr><td>#673</td><td><code>test/conftest.py</code>, <code>test/test_conftest_fd_kinds.py</code></td><td>test-only PR</td><td>n/a</td></tr><tr><td>#674</td><td><code>src/nxt_conf_validation.c</code></td><td><code>test/test_conf_compressors_object.py</code></td><td>yes</td></tr></tbody></table>
+<p>All seven merge clean in sequence; only #674 needed the changelog splice. Validations: CHANGES entries total == unique; XML parses; unit block <code>&lt;change&gt;</code> count == 24; code delta survives.</p>
+<h2>2. Gates</h2>
+<h3>2.1 Dependency audit (OSV) — CLEAN</h3>
+<p><code>python3 scripts/osv_audit.py</code> on the train tree (the script's <code>--ref</code> fetches from GitHub, so a local-only branch must be audited from the working tree):</p>
+<table><thead><tr><th>Lockfile</th><th>Crates</th><th>Result</th></tr></thead><tbody><tr><td><code>tools/unitctl/Cargo.lock</code></td><td>199</td><td>no known advisories</td></tr><tr><td><code>src/wasm-wasi-component/Cargo.lock</code></td><td>224</td><td>no known advisories</td></tr><tr><td><code>src/otel/Cargo.lock</code></td><td>135</td><td>no known advisories</td></tr></tbody></table>
+<h3>2.2 Support matrix (<code>pkg/eol.json</code>) — reviewable, two standing dependency decisions</h3>
+<ul><li><strong><code>jetty</code> 9.4.58.v20250814 — ALREADY EOL (2025-08), decision pending.</strong> The entry documents it:</li></ul>
+<p>Jetty 9.4 is out of community support, 9.4.58 is its final release, Jetty 10/11 are also EOL, and 12.0/12.1 (the supported lines) need Java 11+/17+. This is an upgrade-or-replace decision for the jars bundled into the <strong>java module</strong> — not a blocker for this release, which does not touch the java module.</p>
+<ul><li><strong><code>ecj</code> 3.26.0 — stale, not expired.</strong> Pinned to the 2021-06-14 release while the current is</li></ul>
+<p>3.42.0; no upstream EOL to validate against. Same module, same "not this release" verdict.</p>
+<ul><li>OS/OS-runtime entries flagged "expired" all carry <code>note: EOL</code> (deliberate, covered by the</li></ul>
+<p><code>_grace_*</code> windows). Nothing silently expired.</p>
+<ul><li><strong>CI axes ⊆ eol.json:</strong> the check-run legs (php 8.3/8.4/8.5, go 1.25/1.26/1.27, java 17/21/25/</li></ul>
+<p>26/27, node 20/22/24/26, python 3.12/3.13/3.14, ruby 3.3/3.4/4.0) each exist in <code>eol.json</code> — no version CI tests that the matrix does not declare.</p>
+<ul><li><strong>OpenSSL:</strong> floor 1.1.1 and ceilings 3.5.9 / 4.0.x are documented consistently in both</li></ul>
+<p><code>pkg/eol.json</code> and <code>EOL.md</code>, including why the floor stays at 1.1.1 (RHEL 8 vendor patches into 2029). CI builds 3.5 (11 legs) and 4.0 (6 legs); nothing in the release changes the TLS backend.</p>
+<h3>2.3 Changelog source divergence — ONE ENTRY AT RISK</h3>
+<p><code>CHANGES</code> is hand-edited; <code>docs/changes.xml</code> is what <code>docs/changes.xslt</code> generates from. Measured:</p>
+<pre><code>grep -ic off_t CHANGES                  -&gt; 3
+grep -ic off_t docs/changes.xml         -&gt; 0
+grep -ic offset_bits docs/changes.xml   -&gt; 0</code></pre>
+<p>The "32-bit libc / <code>off_t</code> / <code>_FILE_OFFSET_BITS</code>" entry therefore exists only in the hand file and will not appear in anything generated (site changelog, packaged docs). Count delta 25 vs 24 is consistent with exactly this. Fix before the tag: add it to <code>docs/changes.xml</code> (the entry is long — reuse the text from <code>CHANGES</code>).</p>
+<h3>2.4 Entries owed for product fixes in the train</h3>
+<p>#670 (compress the body part sent with the response headers), #671 (publish the engine port before the thread starts) and #672 (answer a claimed request that is never acknowledged) each fix a reported defect (#666, #667, #665) and carry <strong>no</strong> <code>CHANGES</code>/<code>changes.xml</code> entry. Three entries owed before the tag, or those PRs ship unannounced.</p>
+<h3>2.5 Build/test gate — NOT RUN (not runnable here)</h3>
+<p>No compiler, no container runtime, no SSH route to the stand in the coordinator's environment. The review packet carries the instruction to build and run the suite (including a 32-bit target, where #664/#674's value shows).</p>
+<h2>3. What else is cheaply addable in the remaining days</h2>
+<table><thead><tr><th>Candidate</th><th>Size</th><th>Notes</th></tr></thead><tbody><tr><td>#656 <code>http: log a websocket frame refused for want of a shared buffer</code></td><td>+4/−0, clean</td><td>needs a one-line entry</td></tr><tr><td>#586 <code>conf: bound the size options</code></td><td>+476/−18, DIRTY (stacked on the merged #583)</td><td>retarget to master; <strong>its head now also bounds the compressor <code>level</code> — reconcile with #674, already in the train, before merging both</strong></td></tr><tr><td>#646 <code>tests: cover the alert-range default in nxt_openssl_log_error_level()</code></td><td>+132/−0, clean</td><td>test-only; covers the branch #639 put in the tree</td></tr><tr><td>#657 <code>test: cut the sleeps in three python-leg files and fix the shard table</code></td><td>+74/−10, clean</td><td>test-only, CI flake reduction</td></tr><tr><td>#12 (board) INI injection via PHP options</td><td>no PR</td><td>~1 h, security-adjacent; memchr pattern already exists in the Java validator</td></tr></tbody></table>
+<p>Not for this release: #638 (libunit response through the port queue, +1819/−162, behavioural), #13/#14/#16 (6–12 h each), the feature and HTTP/2 sets.</p>
+<h2>4. Remaining pre-tag actions</h2>
+<ol><li>Add the missing <code>off_t</code> entry to <code>docs/changes.xml</code>.</li><li>Write the three owed entries (#670/#671/#672) into both files.</li><li>Decide patch vs minor (two <code>Change:</code> entries in the section).</li><li><code>version</code> → 1.37.1 / 13701 and re-date the section header (currently <code>04 Oct 2026</code>).</li><li>Reviewer verdicts (Fable / DeepSeek / Opus) from the packet; fold findings in.</li><li>After the tag: pipelines, artifact pull-verify, published-release-page check, the Alpine aport</li></ol>
+<p>rebase (the original trigger).</p>
+<script src="/freeunit-kb/assets/kb.js"></script>
+</body></html>

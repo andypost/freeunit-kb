@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>engineering/oracle-cloud-arm-stand</title>
+<link rel="stylesheet" href="/freeunit-kb/assets/kb.css">
+</head><body>
+<nav class="crumbs"><a href="/freeunit-kb/index.html">index</a> / engineering/oracle-cloud-arm-stand</nav>
+
+<h1>engineering/oracle-cloud-arm-stand</h1>
+
+<h1>Oracle Cloud stand — metrics and native ARM builds (plan)</h1>
+<p>Status: plan, written 2026-10-11 while the owner finishes the instance. Nothing has been measured on it yet. The local host is a 512 MB container: heavy reads, builds and experiments belong on a stand, and this is that stand.</p>
+<h2>What the stand is for</h2>
+<ol><li><strong>Metrics of this install</strong> — cron job outcomes and durations, agent activity,</li></ol>
+<p>and the numbers the quantization design needs.</p>
+<ol><li><strong>Native ARM build and test measurement</strong> — aarch64 first, and the armv7 question</li></ol>
+<p>answered by evidence rather than assumption.</p>
+<ol><li><strong>A place to break things</strong> — fuzzing, sanitizer runs, and the 32-bit warnings</li></ol>
+<p>build that no current CI job covers.</p>
+<h2>Step 1: the armv7 probe, before anything is built</h2>
+<p>Oracle's ARM shape is Ampere A1, which is aarch64 (ARMv8-A, 64-bit). "armv7" is a 32-bit architecture, and whether an A1 instance can execute 32-bit ARM binaries (AArch32 at EL0) is a property of the silicon and the kernel, not a configuration choice. It is also <strong>not yet verified for this platform</strong> — do not plan around it, and do not assume it either way.</p>
+<p>The probe, about five minutes:</p>
+<pre><code class="language-sh">uname -m                      # expect aarch64
+dpkg --add-architecture armhf &amp;&amp; apt-get update
+apt-get install -y libc6:armhf busybox-static:armhf   # or any tiny armhf binary
+busybox               # 32-bit ARM binary: runs, or fails with Exec format error</code></pre>
+<ul><li>Runs → armv7 userland is possible on this host, and the 32-bit build path can be</li></ul>
+<p>measured here (still AArch32 instructions on ARMv8 silicon, which is worth stating in any published number).</p>
+<ul><li>Fails with <code>Exec format error</code> → armv7 needs different hardware (Raspberry Pi,</li></ul>
+<p>ODROID, an older ARM cloud shape). The 32-bit leg then stays with cross-compilation and emulation, and the honest published statement is "aarch64 measured natively; armv7 covered by cross-build and emulation only".</p>
+<p>Related, and tracked separately: #632 (no CI job compiles for a 32-bit target). A green 32-bit build on this stand is the evidence that gate is missing.</p>
+<h2>Step 2: native aarch64 measurement</h2>
+<p>Same command set on both architectures, recorded per run:</p>
+<table><thead><tr><th>Metric</th><th>Command</th><th>Why</th></tr></thead><tbody><tr><td>Build wall clock</td><td><code>./configure --hardening=strict --tests</code> then <code>make -j$(nproc)</code></td><td>arch-dependent cost of the toolchain and the build</td></tr><tr><td>Warning count</td><td>grep the build log for <code>warning:</code></td><td>strict build must be clean; a new warning is a finding</td></tr><tr><td>Peak RSS of the build</td><td><code>/usr/bin/time -v make -j$(nproc)</code></td><td>the A1 has 24 GB, a CI runner does not — catches memory-hungry steps</td></tr><tr><td>Test wall clock and result</td><td><code>make test</code></td><td>per-arch test time and failures</td></tr><tr><td>Binary facts</td><td><code>file unitd</code>, <code>readelf -h</code>, binary size</td><td>64-bit class, size delta against x86_64</td></tr><tr><td>PHP stand, if installed</td><td>the php8.4-dev + libphp8.4-embed stand procedure</td><td>the SAPI path on aarch64</td></tr></tbody></table>
+<p>Two rules that make the numbers worth publishing:</p>
+<ul><li><strong>Repeat three times and report the spread</strong>, not one number: a shared cloud vCPU</li></ul>
+<p>has steal time, and a single run invites a wrong conclusion.</p>
+<ul><li><strong>Compare architectures, not code versions.</strong> An aarch64 run against an x86_64 run</li></ul>
+<p>measures the platform; a claim about a change needs both runs on the same host.</p>
+<h2>Step 3: metrics for this install</h2>
+<p>Collection reads state that already exists — no new instrumentation in the agent:</p>
+<table><thead><tr><th>Metric</th><th>Source</th><th>Note</th></tr></thead><tbody><tr><td>Cron runs, exit status, duration</td><td><code>/opt/data/cron/jobs.json</code> plus the job state files</td><td>per job id, then per job name</td></tr><tr><td>Output produced per run</td><td>the cron output files' size</td><td>a proxy for "did the job have anything to say"</td></tr><tr><td>Delivery success</td><td>cron delivery records</td><td>a job that computes but cannot deliver is a silent failure</td></tr><tr><td>Webhook events by type and class</td><td>gateway log lines</td><td>counts only, never payloads</td></tr><tr><td>Turns per quantum, coalescing ratio</td><td>the quantization design's record</td><td>this is what says whether batching pays</td></tr><tr><td>Cost per job and per quantum</td><td>provider usage</td><td>needs the model's token accounting</td></tr></tbody></table>
+<p>Rules: counts and timings only — <strong>no payloads, no message bodies, no tokens, no personal data</strong>. The stand collects, the bot host stays light. Transport is either a push from a small script or a pull over SSH; decide when the host has a name.</p>
+<h2>Step 4: what the owner needs to provide</h2>
+<ul><li>SSH access (user, key, address) once the instance is up.</li><li>Shape and OS: A1 OCPU/memory, and the image (Ubuntu or Debian) so the package</li></ul>
+<p>commands above are right.</p>
+<ul><li>Permission to install build dependencies (openssl, brotli, zstd, pcre2, php8.4-dev,</li></ul>
+<p>libphp8.4-embed) and to run <code>make test</code>.</p>
+<ul><li>A decision on whether the stand may hold the 32-bit warning build (it is slow under</li></ul>
+<p>emulation, fast if step 1 says AArch32 works).</p>
+<h2>Do not claim</h2>
+<ul><li>No cross-architecture performance comparison from a single run.</li><li>No "armv7 measured natively" until the step-1 probe passes on the stand.</li><li>No metric that includes message content or a credential.</li></ul>
+<h2>Related</h2>
+<ul><li><code>engineering/webhook-reaction-quantization.md</code> — the design that defines the</li></ul>
+<p>quantum metrics</p>
+<ul><li><code>engineering/tls-1.3-and-kubernetes.md</code> — priority work that also wants the ARM</li></ul>
+<p>stand for its test legs</p>
+<ul><li>Where stand work sits in the stream rules</li></ul>
+<script src="/freeunit-kb/assets/kb.js"></script>
+</body></html>

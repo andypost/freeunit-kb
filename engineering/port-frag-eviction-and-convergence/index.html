@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Port fragmentation hardening — eviction and the convergence criteria</title>
+<link rel="stylesheet" href="/freeunit-kb/assets/kb.css">
+</head><body>
+<nav class="crumbs"><a href="/freeunit-kb/index.html">index</a> / engineering/port-frag-eviction-and-convergence</nav>
+<p class="banner warn">analysis</p>
+<h1>Port fragmentation hardening — eviction and the convergence criteria</h1>
+<table class="meta"><tr><th>description</th><td>Why #447's 64-stream cap is bypassable (no time bound), the standard fix (eviction/timeout), the structural fix (refuse fragments from untrusted senders), and falsifiable exit criteria for the whole "untrusted shared-memory" bug class.</td></tr><tr><th>tags</th><td>port, frag, hardening, uaf, dos, convergence</td></tr><tr><th>updated</th><td>2026-09-25</td></tr><tr><th>resources</th><td>https://github.com/freeunitorg/freeunit/pull/447, https://github.com/freeunitorg/freeunit/issues/172</td></tr></table>
+<h1>Port fragmentation hardening — is the rabbit hole finite?</h1>
+<p>Andrey: <em>"эта кроличья нора имеет свет в конце?"</em> Short answer: <strong>yes, and you are near it — but the exit is a bound on the third axis, not the next check.</strong></p>
+<h2>The bypass</h2>
+<p>#447 bounds fragment reassembly by <strong>count</strong> (64 open streams) and <strong>bytes</strong> (128 MiB/stream, 256 MiB/port). Memory DoS is closed. But a hostile peer can open 64 streams with distinct ids and <strong>never send the last fragment</strong>: all 64 slots are held indefinitely, <code>nxt_port_frag_start()</code> refuses every new stream, and legitimate fragmented traffic on that port (e.g. controller→router config) stops. Fix cost to the attacker: ~1 MiB, no further action.</p>
+<p>The bound is not wrong — it is <strong>incomplete</strong>. Count and bytes are bounded; <strong>time is not.</strong> "Hold a slot forever" is a distinct, unbound resource.</p>
+<h2>The fix (standard, small)</h2>
+<p>Bound the <strong>time</strong> dimension, exactly as count and bytes already are:</p>
+<ol><li><strong>Timeout eviction.</strong> An incomplete stream is dropped after T of no progress.</li></ol>
+<p>Legitimate reassembly is one buffer split into a handful of back-to-back frames — it completes in microseconds-to-milliseconds, so a T of a few seconds is orders of magnitude above any real completion and never fires on legit traffic. On drop: free the slot, alert.</p>
+<ol><li><strong>Evict-oldest on pressure (optional).</strong> When all slots are full and a new</li></ol>
+<p>stream starts, evict the oldest incomplete stream so a new (possibly legit) stream always makes progress. Guarantees liveness, not just that the cap holds.</p>
+<p>This <strong>closes the class</strong>: once count + bytes + <strong>time</strong> are all bounded, "hold forever" no longer exists, so neither does this bypass. It is not a new hole — it is the missing third face of the same bound.</p>
+<h2>The structural fix (better, if the trust model allows)</h2>
+<p>#447 itself notes <em>"only FreeUnit's own processes fragment messages."</em> If <strong>apps never legitimately send fragments</strong> — the fragment path is Unit-internal (controller→router, etc.) — then the terminal fix is to <strong>refuse fragment streams from untrusted senders entirely.</strong> The attack surface disappears instead of being bounded. Worth verifying: can an application process reach <code>nxt_port_frag_start()</code> at all? If not, reject non-privileged fragment openers and the count/byte/time caps become pure defense-in-depth.</p>
+<h2>Why it feels infinite — and why it isn't</h2>
+<p>The <strong>nature of the findings changed</strong>, which is the signal you are at the last mile:</p>
+<ul><li>Early findings: <em>no bound at all</em> (unbounded reads, unbounded streams).</li><li>This finding: <em>a bound is bypassable</em> — you added count+bytes, the attacker</li></ul>
+<p>found the axis you did not bound (time).</p>
+<p>You are no longer discovering new classes; you are completing the last dimension of the class you already fixed. That is convergence, even though the tooling (Codex, the fuzzers) keeps producing items.</p>
+<h2>Falsifiable exit criteria for the "untrusted SHM" class</h2>
+<p>The class terminates when <strong>all three</strong> hold for the port layer:</p>
+<ol><li><strong>Every incompletable resource is bounded on three axes</strong> — count, bytes,</li></ol>
+<p><strong>and time</strong> (with a pressure policy: evict-oldest / reject-new).</p>
+<ol><li><strong>Every value read from shared memory is read once</strong> into the reader's own</li></ol>
+<p>copy before use — never re-read, never trusted after a check (#445 records, #468 request). This closes "peer rewrites between check and use".</p>
+<ol><li><strong>Where a trust decision is made, the sender is authenticated</strong> by the kernel,</li></ol>
+<p>not by peer-provided fields (SCM_CREDENTIALS / PROCESS_READY by kernel pid — <code>4c79840d</code>, <code>#341</code>/<code>#172</code> follow-ups).</p>
+<p>When (1)+(2) hold on the port path, the "hostile peer holds or rewrites shared-memory state" family is closed. (3) is defense-in-depth on top.</p>
+<p><strong>Do not</strong> measure progress by finding count — measure it by axes closed. <code>#445</code>/<code>#468</code> close axis 2; <code>#447</code> + the timeout close axis 1 for fragments; <code>#341</code>/PROCESS_READY cover axis 3. After that, the remaining wave is features (h2, schedules), not this bug class.</p>
+<h2>Why it surfaced <em>now</em> — provenance (verified against <code>origin/master</code>)</h2>
+<p>The class is <strong>latent, not new</strong>. Two adjacent workstreams removed the accidental masking that had hidden it — matching @andypost's observation: <em>"тут оно тоже после ремонта вебсокетов вылезло и после оптимизации выделения памяти."</em></p>
+<p><strong>1. Websocket repair</strong> (merge <code>f9ea6dbe</code>, 2026-09-23 — #429/#430/#435, plus the java one-frame and ASGI/<code>max_frame_size</code> work) pushed <strong>bigger, fragmented messages</strong> through the port path (java async <strong>16 MiB</strong>, ASGI now &gt;1 MB). That is what exercises the fragment-reassembly accounting and the message-length handling — and what exposed the unbounded reassembly and the length/id bombs.</p>
+<p><strong>2. Memory-allocation optimisation</strong> changed <strong>buffer lifetime and reuse</strong> in the port path:</p>
+<ul><li><code>fc5f08e1</code> Remove <code>nxt_mem_zone</code>, an unused second allocator (2026-09-14)</li><li><code>0a4d9a23</code> port: re-arm a port without allocating (2026-09-14)</li><li><code>ca47160b</code> port: drop the dead tracking bitmap from the shm segment header (2026-08-18)</li><li><code>0c0f9811</code> port: defer the last reference drop with an embedded work item (2026-09-08)</li></ul>
+<p>These recycle/free port buffers in ways that make "peer writes after the reader checked" and "freed buffer reused" (the #447 UAF) <strong>reachable</strong>.</p>
+<p><strong>Timeline (<code>origin/master</code>):</strong> alloc opt 2026-08-18 / 09-14 → WS repair 2026-09-23 → read-once + bounds land 2026-09-27 (<code>23da8897</code> #445, <code>9289c02d</code> #505, <code>0f0eada9</code> #447). The class surfaced <strong>and</strong> was fixed <em>after</em> the two workstreams — exactly as observed.</p>
+<p><strong>It is a recurring theme, not a one-off.</strong> The same class was already being closed in July (<code>669987d6</code> bounds-check untrusted shmem offsets, 2026-07-06; <code>58d4a08f</code> validate peer-supplied incoming mmap id + geometry, 2026-07-27). The wave is working down a <strong>latent backlog</strong> that two features detonated — which is why it feels endless but is finite: the fixes target the <em>principle</em> (read-once + bound on count/bytes/time), not one symptom.</p>
+<p><strong>Merge state:</strong> #445, #505 and #447 are <strong>in <code>origin/master</code></strong>; #448 (queue retry budget) is <strong>not yet</strong>.</p>
+<h2>Mapping the in-flight PRs onto the axes (verified 2026-09-25)</h2>
+<table><thead><tr><th>PR</th><th>What it bounds</th><th>Axis</th></tr></thead><tbody><tr><td><strong>#445</strong> (already in master)</td><td>record fields read once into the reader's copy</td><td>2</td></tr><tr><td><strong>#447</strong></td><td>fragment streams: 64 / 128 MiB-per-stream / 256 MiB-per-port, <strong>+ <code>nxt_port_frag_evict()</code> evict-oldest on a new stream</strong>, + fixes an <strong>app-triggerable UAF</strong> (mmap fragment with no record → buffer reused)</td><td>1 (partial)</td></tr><tr><td><strong>#448</strong></td><td>SHM queue retry budget = one queue size → enqueue <code>NXT_ERROR</code>, dequeue empty (no spin-forever on a bad cycle value)</td><td>1 (termination)</td></tr><tr><td><strong>#505</strong></td><td>segment ids: <code>NXT_PORT_MMAPS_MAX</code> = 65536 → no "id 100000000 → allocate 100 M slots" bomb</td><td>1 + 2</td></tr><tr><td><strong>#468</strong></td><td>request read once</td><td>2</td></tr><tr><td><strong>#341 / PROCESS_READY</strong></td><td>sender authenticated by the kernel, not peer fields</td><td>3</td></tr></tbody></table>
+<h3>Does #447 close the bypass? Yes — the fix is already in it</h3>
+<p>The quoted bypass (open 64 streams, never finish → every new stream refused) is <strong>already handled by #447 as written</strong>: <code>nxt_port_frag_evict()</code> drops the oldest stream when a new one starts and 64 are open — "<em>streams that a peer never ends cannot block reassembly for good.</em>" So legít traffic always makes progress; the rabbit hole the question describes is closed by the PR, not pending on a new one.</p>
+<p><strong>Residual (minor):</strong> #447 evicts on <strong>pressure</strong>, not on <strong>time</strong>. A held set of incomplete streams with <em>no</em> new traffic (≤64 streams, ≈≤1 MiB) is retained indefinitely. Not a DoS — new streams evict — but an idle <strong>timeout</strong> would clean it and fully close axis 1 for fragments.</p>
+<h3>Verdict</h3>
+<ul><li><strong>#447 + #448 + #505 close the DoS / memory-safety class</strong> on the port layer —</li></ul>
+<p>every unbounded resource (stream count/bytes, queue retries, segment ids) gets a cap, and the record/id reads are bounded on read. Axes <strong>1 + 2</strong> are closed.</p>
+<ul><li><strong>They do not close the trust class (axis 3).</strong> A hostile peer can still <em>send</em></li></ul>
+<p>and <em>forge</em> messages; these PRs bound the <strong>cost</strong>, not the <strong>authority</strong>. Sender authentication (kernel-verified pid) is #341 / PROCESS_READY, a separate lever.</p>
+<h3>Release-policy note</h3>
+<p>#447 carries an <strong>app-triggerable use-after-free fix</strong> (its own "Security changelog entry") — that is patch-worthy per the project's semver rule (patch = security/DoS). The fragment limits and eviction around it are hardening/feature.</p>
+<h3>Merge order / conflicts</h3>
+<p><code>#445</code> (in master) → <code>#505</code> (clean vs master) → <code>#447</code> → <code>#448</code> (based on #447, is <code>dirty</code> → needs rebase). <code>#447</code> and <code>#505</code> both add a top <code>CHANGES</code> entry, so whichever merges second needs a one-line changelog rebase.</p>
+<script src="/freeunit-kb/assets/kb.js"></script>
+</body></html>

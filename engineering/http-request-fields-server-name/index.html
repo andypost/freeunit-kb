@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>engineering/http-request-fields-server-name</title>
+<link rel="stylesheet" href="/freeunit-kb/assets/kb.css">
+</head><body>
+<nav class="crumbs"><a href="/freeunit-kb/index.html">index</a> / engineering/http-request-fields-server-name</nav>
+
+<h1>engineering/http-request-fields-server-name</h1>
+
+<h1>HOST, server_name, local_addr — what the router hands an application</h1>
+<p>_Verified against master and the java-server-name-ipv6 branch, 2026-09-12._</p>
+<h2>Who writes what</h2>
+<p><code>nxt_http_application_handler()</code> (src/nxt_http_request.c) is the only producer of <code>server_name</code>, and <code>nxt_router_process_http_request()</code> (src/nxt_router.c:7212) the only writer into the app-visible <code>nxt_unit_request_t</code>:</p>
+<ul><li><code>r-&gt;host.length != 0</code> → <code>server_name = r-&gt;host</code></li><li>otherwise → the literal <code>"localhost"</code></li></ul>
+<p>So <code>server_name</code> is never empty and never NULL. An <em>empty</em> <code>Host:</code> value also lands in the literal branch: <code>nxt_http_validate_host()</code> leaves <code>length == 0</code> for it, while <code>r-&gt;host.start</code> is set, and the producer tests length, not the pointer.</p>
+<p><code>r-&gt;host</code> comes from <code>nxt_http_request_host()</code> → <code>nxt_http_validate_host()</code>, which: rejects a second Host field (400), rejects <code>/</code> (400), rejects an empty label (<code>..</code>), strips the port with the <code>[literal]</code> case understood, strips one trailing dot, and lowercases only when an ASCII uppercase was present (pool copy; otherwise the value stays a slice of the raw field).</p>
+<h2>Three different fields, three different meanings</h2>
+<table><thead><tr><th>field</th><th>source</th><th>example</th></tr></thead><tbody><tr><td><code>server_name</code></td><td>the name the CLIENT used (Host, normalised)</td><td><code>example.com</code>, <code>[::1]</code></td></tr><tr><td><code>local_addr</code> + <code>local_port</code></td><td>the listener the connection arrived on (<code>nxt_sockaddr_address</code>)</td><td><code>10.0.0.1</code>, <code>8080</code></td></tr><tr><td><code>remote</code></td><td>the peer address, <strong>no port</strong></td><td><code>2001:db8::1</code></td></tr></tbody></table>
+<p><code>local_addr</code>/<code>local_port</code> are filled unconditionally for every app-bound request (router.c:7198-7204). The "interface" is therefore already available — in its own field, read by <code>getLocalAddr()</code>/<code>getLocalName()</code>/<code>getLocalPort()</code>. Putting it into <code>server_name</code> would duplicate a field and substitute an address for a name, which an app building an absolute URL or a redirect out of <code>getServerName()</code> would then emit.</p>
+<h2>Why the literal is "localhost"</h2>
+<ul><li>Unit has no configured server name — no config directive supplies one; the only name</li></ul>
+<p>in play is the one the client sent.</p>
+<ul><li>The literal dates from <code>e929d082</code> (2019, vbart, "Fixed processing of SERVER_NAME</li></ul>
+<p>after 77aad2c142a0"): Host normalisation moved SERVER_NAME to the router's normalised copy, and <code>nxt_unit_split_host()</code> was <strong>removed because it did not work with IPv6 literals</strong> — the same class of bug as the one fixed in the Java module in 2026 (#327).</p>
+<ul><li>All other modules read <code>server_name</code> (php <code>SERVER_NAME</code>, python, ruby, perl, wasm);</li></ul>
+<p>the javac/JNI module was the last one still parsing the raw Host field itself.</p>
+<h2>Trust model</h2>
+<p><code>server_name</code> is client-controlled (any build-a-URL-from-Host framework is exposed to Host-header poisoning: cache and password-reset link forgery). That is not changed by normalisation and is the app's business — the router only guarantees shape, not authenticity. Unit does not require Host on HTTP/1.1, so a request without it reaches an app with <code>server_name = "localhost"</code>.</p>
+<p>Field values may carry obs-text: the header scanner rejects only bytes <code>&lt; 0x20</code>, so 0x80-0xFF pass and reach <code>NewStringUTF</code> (JNI expects valid modified UTF-8; invalid input is undefined). Pre-existing in every JNI string conversion, not specific to this field.</p>
+<h2>Residual defects in the Java module (deferred from #327)</h2>
+<p>The same file splits <code>local_addr</code> and <code>remote</code> at the first <code>:</code>, although both carry an address with no port:</p>
+<ul><li><code>getLocalPort()</code> → hard-coded <code>80</code> on IPv4</li><li><code>getRemotePort()</code> → <code>80</code> on IPv4, <code>0</code> on IPv6</li><li><code>getRemoteHost()</code> → empty string for an IPv6 peer</li><li>there is no remote-port field in <code>nxt_unit_request_t</code> at all</li></ul>
+<p>Those helpers also temporarily store <code>'\0'</code> at <code>str[len]</code> before <code>strtol</code>/<code>NewStringUTF</code>. That is harmless by construction: the router allocates <code>+1</code> per string in <code>req_size</code> and writes the terminator itself, so the store rewrites the byte that is already <code>'\0'</code> (<code>nxt_java_newString()</code> uses the same trick). The defect is wrong values, not memory safety.</p>
+<script src="/freeunit-kb/assets/kb.js"></script>
+</body></html>

@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>engineering/gh-archive-tool</title>
+<link rel="stylesheet" href="/freeunit-kb/assets/kb.css">
+</head><body>
+<nav class="crumbs"><a href="/freeunit-kb/index.html">index</a> / engineering/gh-archive-tool</nav>
+
+<h1>engineering/gh-archive-tool</h1>
+<table class="meta"><tr><th>created</th><td>2026-09-10 (after gateway restore). <strong>Tool:</strong> <code>tools/gh_archive.py</code>.</td></tr></table>
+<h1>gh_archive — local GitHub issue/PR/comment archive + FTS search</h1>
+<p><strong>Created:</strong> 2026-09-10 (after gateway restore). <strong>Tool:</strong> <code>tools/gh_archive.py</code>.</p>
+<h2>Why</h2>
+<p>Searching upstream (nginx/unit, freeunitorg/freeunit) via the GitHub API is slow and rate-limited (5000 core req/hr; search only 30/hr). A <strong>frozen/archived</strong> repo is fully static, so <strong>one dump is complete forever</strong> and all later search costs <strong>zero API calls</strong>. The git history existed for commits; this gives the same for issues/PRs/comments/reviews.</p>
+<h2>What it fetches (repo-wide endpoints = cheap)</h2>
+<table><thead><tr><th>File</th><th>Source</th><th>nginx/unit</th></tr></thead><tbody><tr><td><code>issues.jsonl</code></td><td><code>GET /repos/{r}/issues?state=all</code> (issues <strong>and</strong> PRs)</td><td>1554</td></tr><tr><td><code>issue_comments.jsonl</code></td><td><code>GET /repos/{r}/issues/comments</code> (repo-wide)</td><td>8590</td></tr><tr><td><code>pr_review_comments.jsonl</code></td><td><code>GET /repos/{r}/pulls/comments</code> (inline)</td><td>2217</td></tr><tr><td><code>archive.sqlite</code></td><td>FTS5 index over title/body/comments (porter unicode61)</td><td>—</td></tr></tbody></table>
+<p>PR <em>reviews</em> (approve/request-changes summaries) have <strong>no repo-wide endpoint</strong> — not fetched (would be one request per PR). Inline review comments ARE covered.</p>
+<p><strong>Location:</strong> <code>/opt/data/gh-archive/&lt;owner&gt;__&lt;repo&gt;/</code> (override: <code>GH_ARCHIVE_DIR</code>).</p>
+<h2>Usage</h2>
+<pre><code class="language-bash">export GH_CONFIG_DIR=/opt/data/.config/gh   # read-only andypost token
+python3 tools/gh_archive.py dump   --repo nginx/unit      # one-shot (~90 reqs, ~1 min)
+python3 tools/gh_archive.py search --repo nginx/unit &quot;acme cron&quot;
+python3 tools/gh_archive.py search --repo nginx/unit --kind comment &quot;certbot&quot;
+python3 tools/gh_archive.py search --repo nginx/unit --kind pr &quot;compression&quot;
+python3 tools/gh_archive.py stats  --repo nginx/unit</code></pre>
+<p><code>--kind</code>: all | item | issue | pr | comment | review. FTS5 match syntax supported (<code>"exact phrase"</code>, <code>term*</code>, <code>a OR b</code>, <code>a NOT b</code>).</p>
+<h2>nginx/unit archive (2026-09-10)</h2>
+<ul><li><strong>Archived upstream</strong> (frozen 2025-10-08) → the dump is <strong>complete, never stale</strong>.</li><li>Coverage: <strong>1087 issues + 467 PRs</strong>, created <strong>2017-09-06 → 2025-10-08</strong>;</li></ul>
+<p>8590 issue comments, 2217 review comments. Dump ≈ 90 requests.</p>
+<h2>freeunitorg/freeunit archive (2026-09-10)</h2>
+<ul><li><strong>Live repo</strong> → snapshot, not frozen. 311 items, 966 issue comments, 555 review</li></ul>
+<p>comments; dumper ran in ~18s, zero rate-limit pressure. Re-run <code>dump</code> to refresh.</p>
+<ul><li>Use it for instant offline search of the fork's own history (e.g. the #254 capget</li></ul>
+<p>thread, #304/#316 UTF-8 discussions).</p>
+<h2>Pitfalls</h2>
+<ul><li><code>gh api --paginate --slurp</code> returns a <strong>list of pages</strong>; flatten one level. The</li></ul>
+<p>dumper does this. Don't <code>json.loads</code> the whole stream as one object.</p>
+<ul><li>If the process is interrupted mid-index (leaves <code>archive.sqlite-journal</code>), just</li></ul>
+<p>re-run the index build — the JSONL files are already on disk (build_index reads them). Delete the stale <code>-journal</code> first.</p>
+<ul><li><code>search</code> verbs are <code>issue</code>/<code>pr</code>/<code>comment</code>/<code>review</code>, not GitHub's <code>is:issue</code>.</li><li>The 30/hr <strong>search</strong> API limit does not apply here — we use the <strong>core</strong> API</li></ul>
+<p>(5000/hr) for enumeration; local FTS does the searching.</p>
+<h2>Refresh for a live repo (freeunitorg/freeunit)</h2>
+<p>That repo is <strong>not archived</strong> → re-dump to refresh (or wire a <code>change-track</code>-style delta later). For a one-off refresh, just re-run <code>dump</code> (idempotent: rewrites JSONL + rebuilds the index).</p>
+<script src="/freeunit-kb/assets/kb.js"></script>
+</body></html>

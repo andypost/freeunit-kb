@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>engineering/drupal-cron-queue-stub</title>
+<link rel="stylesheet" href="/freeunit-kb/assets/kb.css">
+</head><body>
+<nav class="crumbs"><a href="/freeunit-kb/index.html">index</a> / engineering/drupal-cron-queue-stub</nav>
+
+<h1>engineering/drupal-cron-queue-stub</h1>
+<table class="meta"><tr><th>date</th><td>2026-09-11 · <strong>Status:</strong> built + tested live on running unitd 1.36.1</td></tr><tr><th>artifacts</th><td><code>tools/artisan_stubs/drupal_stub.py</code></td></tr></table>
+<h1>Drupal cron/queue as a Unit app — the scheduler stub</h1>
+<p><strong>Date:</strong> 2026-09-11 · <strong>Status:</strong> built + tested live on running unitd 1.36.1 <strong>Artifacts:</strong> <code>tools/artisan_stubs/drupal_stub.py</code></p>
+<h2>Why Drupal needs a DIFFERENT stub than Laravel</h2>
+<table><thead><tr><th></th><th>Laravel</th><th>Drupal</th></tr></thead><tbody><tr><td>Queue</td><td><code>queue:work</code> = <strong>long-lived daemon</strong> (loop inside the process)</td><td><code>drush queue:run &lt;name&gt;</code> = <strong>one-shot</strong>: drains items, <strong>exits</strong></td></tr><tr><td>Cron</td><td><code>schedule:work</code> = daemon</td><td><code>drush core:cron</code> = <strong>one-shot</strong>, host schedules it</td></tr><tr><td>Model</td><td>1 persistent process to <strong>supervise</strong></td><td>frequent short runs = a <strong>scheduler (tick loop)</strong></td></tr></tbody></table>
+<p>→ Laravel stub = supervisor (<code>worker_core.py</code>). <strong>Drupal stub = scheduler</strong> (<code>drupal_stub.py</code>). Same ASGI-lifespan container, opposite inner loop.</p>
+<h2>What <code>drupal_stub.py</code> does</h2>
+<p><code>lifespan.startup</code> launches one <strong>ticker per job</strong>:</p>
+<ul><li><code>core:cron</code> → every <code>CRON_INTERVAL</code> (default 180 s);</li><li><strong>one ticker per queue</strong> → <code>queue:run &lt;q&gt; &lt;QUEUE_RUN_ARGS&gt;</code> every <code>QUEUE_INTERVAL</code>.</li></ul>
+<p>Overlap protection is inherent: each ticker <strong>awaits</strong> its run before sleeping, so a slow cron never stacks up. <code>queue:run</code> runs with <code>--time-limit</code> so a single run is bounded — the correct Drupal idiom (<code>--time-limit</code>, <code>--items-limit</code>, <code>--lease-time</code> are the real knobs).</p>
+<p>This is exactly a <code>crontab</code> of drush lines, but <strong>inside the Unit runtime</strong>: no host cron, no Supervisor, one config, unified lifecycle/logging.</p>
+<h2>Live test (running unitd)</h2>
+<p>Config: <code>CRON_INTERVAL=3</code>, <code>QUEUES=cron_queue_test,my_queue</code>, <code>QUEUE_INTERVAL=2</code>. Observed in <code>drush.out</code> over ~7 s:</p>
+<pre><code>core:cron                                 @ :04, :07, :10      (every 3s)
+queue:run my_queue --time-limit=1         @ :04, :06, :08, :10  (every 2s)
+queue:run cron_queue_test --time-limit=1  @ :04, :06, :08, :10  (every 2s)</code></pre>
+<p>Health endpoint <code>:8809/</code> → <code>{"cron_interval":3,"queues":[...],"queue_interval":2}</code> ✅</p>
+<h2>Config (the same two gotchas as every worker)</h2>
+<pre><code class="language-json">&quot;applications&quot;: {
+  &quot;drupal&quot;: {
+    &quot;type&quot;: &quot;python&quot;, &quot;path&quot;: &quot;&lt;stubs dir&gt;&quot;,
+    &quot;module&quot;: &quot;drupal_stub&quot;, &quot;callable&quot;: &quot;application&quot;,
+    &quot;processes&quot;: { &quot;spare&quot;: 1, &quot;idle_timeout&quot;: 0 },
+    &quot;environment&quot;: {
+      &quot;DRUSH&quot;: &quot;/var/www/html/vendor/bin/drush&quot;,
+      &quot;DRUPAL_ROOT&quot;: &quot;/var/www/html&quot;,
+      &quot;CRON_INTERVAL&quot;: &quot;180&quot;,
+      &quot;QUEUES&quot;: &quot;my_queue,other_queue&quot;,
+      &quot;QUEUE_INTERVAL&quot;: &quot;60&quot;,
+      &quot;QUEUE_RUN_ARGS&quot;: &quot;--time-limit=55&quot;
+    }
+  }
+}</code></pre>
+<ul><li><strong><code>spare: 1</code></strong> — start eagerly (an app with no listener is never lazily started).</li><li><strong><code>idle_timeout: 0</code></strong> — the app serves no requests → without this the router</li></ul>
+<p>reaps it after 15 s. (Both nested under <code>processes</code>.)</p>
+<h2>Drupal-specific notes (verified against drush docs)</h2>
+<ul><li><strong>By default Drupal cron already runs queue workers</strong> (<code>QueueWorker</code> annotation</li></ul>
+<p><code>cron</code> property; <code>cron = NULL</code> opts a worker OUT of cron). So for queues that run via cron, you can <strong>skip the per-queue ticker</strong> and just run <code>core:cron</code>. Use explicit <code>queue:run &lt;q&gt;</code> tickers only for queues that opt out (heavy/long ones) — that's the standard pattern for big site queues.</p>
+<ul><li><code>drush core:cron</code> should be guarded by <code>maint:status</code> (avoid cache poisoning in</li></ul>
+<p>maintenance mode) — add <code>&amp;&amp; drush maint:status</code> if needed.</p>
+<ul><li><code>queue:run</code> supports <code>--time-limit</code> / <code>--items-limit</code> / <code>--lease-time</code>.</li></ul>
+<h2>When to prefer an OS cron instead</h2>
+<p>If the site already has a working crontab and you only want the <strong>queue</strong> off the host scheduler, run just the queue ticker. If you want Drupal <strong>fully self-driven</strong> inside Unit (no host cron at all), use the cron ticker. Both are supported by the same app via env.</p>
+<h2>Two trigger transports (measured 2026-09-12)</h2>
+<table><thead><tr><th><code>TRIGGER</code></th><th>one tick does</th><th>tick latency</th></tr></thead><tbody><tr><td><code>drush</code> (default)</td><td>spawns a cold one-shot CLI (<code>drush core:cron</code>) — PHP start + cold opcache fill + bootstrap <strong>inside the tick</strong></td><td><strong>0.52 s</strong></td></tr><tr><td><code>http</code></td><td>GET on the fork-spawn endpoint; the Unit worker forks a child with <strong>warm</strong> opcache, the tick returns at once</td><td><strong>0.004 s</strong></td></tr></tbody></table>
+<p>≈130× per tick, and the tick stops blocking: the job continues in the detached child. <code>http</code> mode needs <code>SPAWN_URL</code> (<code>SPAWN_QUEUE_URL</code> optional, <code>&lt;q&gt;</code> placeholder). Every tick logs its own latency — to <code>$STUB_LOG</code>, because a Unit Python app's stdout is not forwarded to the Unit log. Numbers/method: <code>fork-spawn-drupal-measurement.md</code>.</p>
+<h2>Queue drain is implemented (was a stub) — measured 2026-09-12</h2>
+<p><code>?job=queue&amp;name=&lt;queue&gt;&amp;limit=&lt;n&gt;</code> now really drains: <code>drupal_boot_queue.php</code> boots the same <code>DrupalKernel</code>, takes <code>\Drupal::queue($name, TRUE)</code> (reliable — <code>claimItem()</code> needs it), runs <code>plugin.manager.queue_worker-&gt;createInstance($name)-&gt;processItem($data)</code> per item and <code>deleteItem()</code>s it, with an item limit. Env: <code>QUEUE_NAME</code>, <code>QUEUE_LIMIT</code>, <code>QUEUE_FILL</code> (fill instead of drain), <code>DRUPAL_QUEUE_BOOT</code>; one JSON line per run into <code>queue_boot.out</code>.</p>
+<p>Real numbers (harness module <code>fu_queue_test</code>, 1 ms/item, 50 items): cold CLI 0.26–0.31 s, real <code>drush queue:run</code> 0.67–0.69 s, warm fork child 0.177–0.203 s with the trigger returning in 3.4–7.2 ms. Method and caveats: <code>fork-spawn-drupal-measurement.md</code>.</p>
+<p>The site's own <code>queue:list</code> is empty on a minimal profile — a queue to measure needs a module that declares a <code>#[QueueWorker]</code> (core: <code>locale</code>, <code>media</code>, <code>package_manager</code>, tests: <code>cron_queue_test</code>).</p>
+<h2>Relation to the other stubs</h2>
+<table><thead><tr><th>Scenario</th><th>Stub</th><th>Inner loop</th></tr></thead><tbody><tr><td>Laravel <code>queue:work</code> / <code>horizon</code></td><td><code>worker_core.py</code></td><td>supervise long-lived child</td></tr><tr><td>Drupal cron + queues</td><td><code>drupal_stub.py</code></td><td>schedule one-shot drush ticks</td></tr><tr><td>ACME renewal</td><td><code>acme_stub.py</code> / certbot hook</td><td>scheduled renew + deploy</td></tr></tbody></table>
+<p>All three are ASGI-lifespan apps in the Unit runtime — the X10 primitive applied to three very different workloads. Same <code>spare:1</code> + <code>idle_timeout:0</code> requirement.</p>
+<script src="/freeunit-kb/assets/kb.js"></script>
+</body></html>

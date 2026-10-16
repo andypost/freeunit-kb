@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>engineering/nxt-tests-hooks-pr413</title>
+<link rel="stylesheet" href="/freeunit-kb/assets/kb.css">
+</head><body>
+<nav class="crumbs"><a href="/freeunit-kb/index.html">index</a> / engineering/nxt-tests-hooks-pr413</nav>
+
+<h1>engineering/nxt-tests-hooks-pr413</h1>
+
+<h1>NXT_TESTS hooks: per-object macro in two archives (PR #413)</h1>
+<p>Reviewed at head <code>75610082fd14</code> (build/one-pass-test-archive), 2026-09-26. Facts below are from the CI run on that head (<code>c-tests</code> job, step "Check the test hooks are in the test programs only") and from the diff, not from the PR prose.</p>
+<h2>The mechanism</h2>
+<ul><li><code>--tests</code> no longer calls <code>auto/have</code>, so <code>NXT_TESTS</code> is absent from</li></ul>
+<p><code>build/include/nxt_auto_config.h</code>. It is a per-object macro now.</p>
+<ul><li><code>auto/make</code> compiles every source of <code>NXT_LIB_SRCS</code> and <code>NXT_LIB_UNIT_SRCS</code> a second time</li></ul>
+<p>with <code>-DNXT_TESTS=1</code> into <code>&lt;name&gt;.test.o</code>, and archives them as <code>libnxt-tests.a</code> and <code>libunit-tests.a</code>. Sources under <code>src/test/</code> are compiled with the macro. Every test program links the <code>-tests</code> archives only.</p>
+<ul><li><code>unitd</code>, <code>libnxt.a</code>, <code>libunit.a</code>, <code>build/src/nxt_unit.o</code> (the object the language modules</li></ul>
+<p>link) and all <code>*.unit.so</code> come from the plain objects. Without <code>--tests</code> nothing extra is compiled and the generated rules only gain an empty variable.</p>
+<ul><li><code>NXT_LIB_UNIT_TEST_OBJS</code> also names four core objects explicitly (<code>nxt_lvlhsh.c</code>,</li></ul>
+<p><code>nxt_murmur_hash.c</code>, <code>nxt_socket_msg.c</code>, <code>nxt_websocket.c</code>) so that libunit test programs, which link <code>libunit-tests.a</code> alone, are self-contained. All four are in <code>NXT_LIB_SRCS</code> too, so the object is deliberately in both archives. This is the only hand-maintained list left; a missing core dependency fails at link time (loud), not silently.</p>
+<h2>The gate</h2>
+<p><code>.github/scripts/check-test-hooks.sh</code>, run in the <code>c-tests</code> job between "Build C tests" and "Run C tests". It keeps no list: hook symbols are the names defined in <code>X.test.o</code> and not in <code>X.o</code>, dot-containing compiler clones skipped. It fails (exit 1, <code>::error::</code>) when</p>
+<ul><li><code>NXT_TESTS</code> is in <code>nxt_auto_config.h</code>, or <code>.test.o</code> files are missing, or the derived hook</li></ul>
+<p>set is empty (these three are the anti-vacuous guards — an empty set is a FAILURE);</p>
+<ul><li>a source outside <code>src/test/</code> mentions <code>NXT_TESTS</code> in a preprocessor directive but has no</li></ul>
+<p><code>.test.o</code>, or its plain and instrumented objects are identical after <code>objcopy --strip-debug</code>;</p>
+<ul><li><code>unitd</code>, <code>libnxt.a</code>, <code>libunit.a</code>, <code>nxt_unit.o</code>, <code>libnxt.so</code> or any <code>*.unit.so</code> defines a</li></ul>
+<p>hook symbol;</p>
+<ul><li>a test program that linked object X does not define X's hooks (it took the plain copy).</li></ul>
+<p>Names that another plain object also defines are printed and excluded from check 2 (a static that one compile inlines); the script argues the leak they could hide is caught by the macro-in-config-header guard instead.</p>
+<h2>Measured on the head</h2>
+<ul><li>The gate prints <code>hook symbols: 47</code> and <code>ok: hooks are in the test programs only</code>. The PR</li></ul>
+<p>body says 43 symbols (28 core + 15 libunit) — a source-level count; the derived set is a superset because it also picks up statics that only one of the two compiles keeps.</p>
+<ul><li>Census at the head: 10 core/libunit sources carry 22 <code>#if (NXT_TESTS)</code> directives, plus 9</li></ul>
+<p>internal headers (and <code>src/nxt_unit.h</code>, the public one) with declarations. Matches the body.</p>
+<ul><li><code>pkg/deb/Makefile:172</code> and <code>pkg/rpm/Makefile:145</code> pass <code>--tests</code>, and have since the 2017</li></ul>
+<p>packaging commits (<code>156877f3</code>, <code>eabe25d9</code>) — that commit is contained in 98 tags, oldest <code>0.2</code>, newest <code>1.36.1</code>, i.e. the released debs and rpms carried the hooks until this lands.</p>
+<script src="/freeunit-kb/assets/kb.js"></script>
+</body></html>

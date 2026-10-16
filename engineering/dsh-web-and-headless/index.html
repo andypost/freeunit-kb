@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DeepSeek Harness (dsh) — web and headless operation</title>
+<link rel="stylesheet" href="/freeunit-kb/assets/kb.css">
+</head><body>
+<nav class="crumbs"><a href="/freeunit-kb/index.html">index</a> / engineering/dsh-web-and-headless</nav>
+
+<h1>DeepSeek Harness (dsh) — web and headless operation</h1>
+<table class="meta"><tr><th>description</th><td>How the FreeUnit agent fleet uses dsh: the shared core behind every surface, the interactive web surface, the one-shot headless surface, credentials, permissions, deployment, and the dsh session parser.</td></tr><tr><th>format</th><td>open-knowledge-format-v1</td></tr><tr><th>updated</th><td>2026-10-15</td></tr><tr><th>maintainer</th><td>andypost</td></tr></table>
+<h1>DeepSeek Harness (<code>dsh</code>) — web and headless operation</h1>
+<p>Read 2026-10-15 against <code>deepseek-ai/deepseek-harness</code> <code>master</code> (the project's user guides, CLI reference, and the <code>web-app</code>/<code>headless</code>/<code>base</code> bundle references). The commands and defaults below are the project's documented behaviour, not a measurement on our own bench box; a claim that matters is re-run before it is relied on. The fleet-local facts (session parser, model routing, authority rules) are on the harness side and linked at the end.</p>
+<h2>One core, several surfaces</h2>
+<p><code>dsh</code> is one launcher that boots a <strong>profile</strong>: an ordered stack of plugin bundles plus a <code>cordis.patch.yml</code> overlay. <code>web</code> and <code>headless</code> are two profiles over the same <code>dsh-base</code> core, so they share the model adapters, the tool set, durable sessions, and the sandbox/approval policy. Only the surface differs.</p>
+<table><thead><tr><th>Profile</th><th>Bundle that adds the surface</th><th>Opens a port?</th></tr></thead><tbody><tr><td><code>web</code></td><td><code>dsh-web-app</code> (HTTP server + browser UI)</td><td>yes, loopback <code>:3080</code> by default</td></tr><tr><td><code>headless</code></td><td><code>dsh-headless</code> (one-shot runner)</td><td>no</td></tr><tr><td><code>sdk</code>, <code>sdk-minimal</code></td><td>JSON-RPC over stdio</td><td>no</td></tr><tr><td><code>acp</code></td><td>Agent Client Protocol over stdio</td><td>no</td></tr></tbody></table>
+<p>The invoking directory is the default workspace root. <code>web</code>, <code>headless</code>, <code>sdk</code>, <code>sdk-minimal</code>, and <code>acp</code> auto-initialize on first use from shipped templates.</p>
+<h2>Web surface</h2>
+<pre><code class="language-sh">npx @deepseek-ai/dsh web           # published; or: dsh --profile web
+dsh web --no-open --port 8080
+dsh web --host 10.0.0.7 --public-url https://app.example/ui/ --trusted-host app.example</code></pre>
+<p>First run, in order:</p>
+<ol><li><strong>Set a model.</strong> Settings → Models → a DeepSeek API key, or a third-party /</li></ol>
+<p>custom OpenAI- or Anthropic-compatible provider. A change applies on the next request; no restart.</p>
+<ol><li><strong>Choose a workspace.</strong> The composer stays disabled until one is selected.</li></ol>
+<p>Operational rules that are easy to get wrong:</p>
+<ul><li>The printed <code>dsh web:</code> line carries a fresh process token. It is a</li></ul>
+<p>credential; share the URL only with intended users. <code>printUrl: false</code> suppresses the line.</p>
+<ul><li><code>--public-url</code> is an <strong>advertisement, not trust</strong>. A browser that reaches</li></ul>
+<p>the deployment under any other authority gets <code>403</code> until that authority is named with <code>--trusted-host</code>. The reverse proxy owns the external leg: keep the browser-facing <code>Host</code>, strip the mount prefix, forward upgrades, and rewrite the cookie <code>Path</code> (plus <code>Secure</code> when it terminates TLS).</p>
+<ul><li><code>--host</code> takes one concrete local IPv4/IPv6 address; a wildcard is refused.</li><li><code>--tls-cert</code> and <code>--tls-key</code> are one setting (both or neither). Files are</li></ul>
+<p>read once and never renewed or watched; a change needs a listener reload or a process restart.</p>
+<ul><li>SSH launches print the URL but do not open a browser.</li><li>Neither <code>--public-url</code> nor the Host/Origin fence protects the port itself:</li></ul>
+<p>restrict it to the trusted proxy or network.</p>
+<p>Permissions are per-session <strong>presets</strong>: <code>workspace-write</code> (write under the session workspace and the backend temp area) plus <code>ask</code>, and <code>danger-full-access</code> plus <code>never</code>. <code>DSH_PERMISSION_MODE</code> sets the process fallback. Stored General-settings permission changes affect later sessions, not an already-open one.</p>
+<h2>Headless surface — the automation surface</h2>
+<p>The surface for CI and for the 24/7 fleet: one task per process, no server, no port, nothing left running.</p>
+<pre><code class="language-sh">dsh --profile headless &quot;run the tests&quot;
+echo &quot;summarize this diff&quot; | dsh --profile headless
+{ echo &quot;Summarize these changes:&quot;; git diff --stat; } | dsh --profile headless
+dsh --profile headless --json &quot;run the tests&quot;
+dsh --profile headless --session-id session-… &quot;continue&quot;</code></pre>
+<h3>Output contract</h3>
+<table><thead><tr><th>Channel</th><th>Content</th></tr></thead><tbody><tr><td>stdout</td><td>the final answer only (one line, no tool output)</td></tr><tr><td>stderr</td><td><code>dsh: reasoning:</code> sections and, on failure, <code>dsh: &lt;code&gt;: &lt;message&gt;</code></td></tr><tr><td>exit</td><td><code>0</code> only for a completed turn; otherwise <code>1</code></td></tr></tbody></table>
+<p>A positional task is used verbatim and stdin is not read; put the whole prompt in the pipe for piped input. An empty result prints an empty stdout line and exits 1, so a loop should fail on empty output, not only on a nonzero exit.</p>
+<h3><code>--json</code></h3>
+<p>Replaces the final-text stdout line with newline-delimited JSON: it opens with <code>session</code> (id + cwd), carries <code>status</code>, <code>text</code>, <code>thinking</code>, <code>tool_call</code>, and <code>tool_result</code> events, and closes with <code>final</code>. Projection facts:</p>
+<ul><li><code>text</code>/<code>thinking</code> are emitted when a step <strong>commits</strong>, not per token, so a</li></ul>
+<p>retried attempt never reaches the stream.</p>
+<ul><li>Every string except <code>final</code> is capped at 8 KiB and flagged <code>truncated</code>; one</li></ul>
+<p>event line is capped at 32 KiB; payloads nested 64 levels or deeper are cut.</p>
+<ul><li>A failure raised outside a turn emits <code>error</code> and no <code>final</code>. A turn that</li></ul>
+<p>fails in-turn still ends with <code>final</code> (often empty). <strong>Treat exit code 1 as the failure signal</strong>, not the presence of <code>final</code>.</p>
+<ul><li>The stream is a projection, not the session log.</li></ul>
+<h3>Resuming</h3>
+<p><code>--session-id &lt;id&gt;</code> adopts a persisted session; an unknown id fails before the task runs. Adoption is scoped: the session must match the recorded working directory, be a root session (not a subagent or fork), run under a preset this profile composes, and not already be live in the process.</p>
+<h3>Credentials</h3>
+<p>The shipped headless profile <strong>disables the managed credential store</strong>, so keys saved by the GUI are ignored. The order is launch environment, then <code>&lt;invocation cwd&gt;/.env</code>, then <code>$DSH_HOME/.env</code>. An exported empty value shadows the <code>.env</code> fallback. To restore stored authentication, re-enable the <code>credentials</code>, <code>authorization</code>, and <code>deepseek-account</code> rows in the headless profile patch.</p>
+<h3>Permissions — the automation trap</h3>
+<p>Base defaults to sandbox <code>workspace-write</code> plus approval <code>ask</code>. Headless mounts <strong>no approval answerer</strong>, so an <code>ask</code> falls through to <code>unavailable</code> and fails closed: anything needing escalation is denied. In-workspace reads, writes, and commands run fine. For an unattended job that needs wider access, the documented lever is:</p>
+<pre><code class="language-sh">DSH_PERMISSION_MODE=danger-full-access dsh --profile headless &quot;…&quot;</code></pre>
+<p>That is what the project's own end-to-end tests use. It bypasses the sandbox, so run it in a container or disposable checkout, never on a shared host unattended.</p>
+<h2>Consuming dsh sessions</h2>
+<p>The fleet normalizes dsh sessions with the harness parser, not by reading the log by hand:</p>
+<pre><code>freeunit-harness/tools/session-extract/dsh.py   # newest session unless a path is given</code></pre>
+<p>It reads <code>~/.dsh/sessions/<em>/</em>/session.v4.jsonl.zstd</code>, decompresses with <code>zstd</code>, and emits one line carrying cwd class, start/end, turn count, tokens (in/out/cache-read), per-model call counts, tool counts, touched files, and error markers. One trap is pinned in its header: an <code>assistant/message</code> line holds usage twice (<code>data.usage</code> and a copy under <code>data.stream[].chunk.usage</code>); read <code>data.usage</code> only. Before a long review or benchmark, checking a peer's existing session through the parser is cheaper than repeating the work.</p>
+<h2>Gotchas worth repeating</h2>
+<ul><li>One task per headless run; split multi-step work into separate runs.</li><li>Default mode has no pre-token heartbeat: stderr is silent until the first</li></ul>
+<p>reasoning delta.</p>
+<ul><li>Reasoning goes to stderr and can be large and sensitive; route stderr to a</li></ul>
+<p>controlled sink.</p>
+<ul><li>A final background job may not settle into persisted history during</li></ul>
+<p>teardown.</p>
+<ul><li>Headless must be started through the <code>dsh</code> launcher, which owns the exit</li></ul>
+<p>request.</p>
+<ul><li>A source checkout must be built (<code>pnpm run build</code>) before <code>dsh web</code>; there</li></ul>
+<p>is no source-serving fallback.</p>
+<h2>See also</h2>
+<ul><li><code>freeunit-harness/docs/agent-tools.md</code> — dsh next to agy, OpenCode, Codex:</li></ul>
+<p>install, instruction files, skills, scripted use, cost, MCP, sandbox.</p>
+<ul><li><code>freeunit-harness/docs/model-routing.md</code> — which model gets which FreeUnit</li></ul>
+<p>job; DeepSeek V4.1 Flash is the first-pass public-PR reviewer.</p>
+<ul><li><code>freeunit-harness/docs/agent-coordination.md</code> — the bus, the authority</li></ul>
+<p>table, and where findings become KB pages.</p>
+<script src="/freeunit-kb/assets/kb.js"></script>
+</body></html>

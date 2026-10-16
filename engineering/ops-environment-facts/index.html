@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>engineering/ops-environment-facts</title>
+<link rel="stylesheet" href="/freeunit-kb/assets/kb.css">
+</head><body>
+<nav class="crumbs"><a href="/freeunit-kb/index.html">index</a> / engineering/ops-environment-facts</nav>
+
+<h1>engineering/ops-environment-facts</h1>
+
+<h1>Ops / environment facts (SOUL environment quirks)</h1>
+<p>_2026-09-03. Cross-cutting facts about the runtime environment. Kept OUT of the small persistent memory (MEMORY.md) so memory stays navigation-only; these go through the KB graph so a query like "why did yt-dlp / uv / telegram fail" finds them with relevance, not by recall._</p>
+<h2>YouTube / yt-dlp</h2>
+<ul><li><strong>Blocked from Hetzner cloud IPs</strong>: <code>yt-dlp</code> hits an anti-bot "Sign in to</li></ul>
+<p>confirm you're not a bot" wall on the server (Hetzner IP ranges are flagged).</p>
+<ul><li>Workaround: pass <code>--cookies &lt;file&gt;</code> (a logged-in YouTube cookies.txt) and/or</li></ul>
+<p><code>--proxy &lt;host:port&gt;</code> to route around the IP fingerprint. Without one of these, downloads from the server fail.</p>
+<ul><li>Applies to any tool that fetches YouTube (yt-dlp, ytarchive, youtube-transcript</li></ul>
+<p>helpers). Local (non-Hetzner) IPs usually don't hit the wall.</p>
+<h2>uv (python package manager)</h2>
+<ul><li>Prefer <code>uv</code> over <code>pip</code> for any Python work in this environment.</li><li><code>python3</code> here is <strong>3.14.7</strong>; uv resolves packages from PyPI, not apt.</li><li>Cache: <code>UV_CACHE_DIR=/tmp/uv-cache</code> if the default cache dir is unwritable</li></ul>
+<p>(container may restrict writes under the user's home). <code>uv cache clean</code> to reclaim space.</p>
+<ul><li>Some tools are Rust binaries not on PyPI: <code>uv tool install ast-grep</code> fails with</li></ul>
+<p>"not found in package registry" (ast-grep is a cargo/crates.io tool, not pip). For those use the crates/native route, not uv.</p>
+<h2>Telegram output quirks</h2>
+<ul><li>Config: <code>platforms.telegram.extra.rich_messages: true</code>, <code>topics: true</code>,</li></ul>
+<p><code>silent_restart: true</code>, <code>disable_link_previews: true</code>, <code>guest_mode: true</code>.</p>
+<ul><li><strong>No tables in the Telegram group</strong> — Telegram renders markdown tables</li></ul>
+<p>inconsistently/breaks them. Use bullets or labeled lines (memory rule + seen in digests). Rich markdown is on but the (upstream) reader may drop/truncate richer markup on incoming messages.</p>
+<ul><li><code>require_mention: true</code> — the bot only acts on an explicit @mention in a</li></ul>
+<p>group/topic; DM is always on.</p>
+<ul><li><strong>Never echo tool output in the group.</strong> Only clean result text. (Andrey rule.)</li></ul>
+<h2>Misc environment</h2>
+<ul><li><strong>Scaleway benchmarks</strong>: paramiko (no ssh prompt), per-min billing, instances</li></ul>
+<p>created/owned only by Andrey. Details: <code>engineering/scaleway-benchmark-plan.md</code>.</p>
+<ul><li>Scripts for cron run from <code>~/./scripts/</code> (i.e. <code>/opt/data/scripts/</code>); <code>script</code></li></ul>
+<p>cron field = <strong>filename only</strong>, args via a wrapper. <code>model</code> for a cron job can only be pinned via CLI (<code>hermes cron edit</code>), not the agent cron tool.</p>
+<ul><li><code>glab</code> (GitLab) global config targets <code>gitlab.com</code>; for aports use</li></ul>
+<p><code>GITLAB_HOST=gitlab.alpinelinux.org</code> per-invocation (do NOT mutate the global config). Keyless public reads work; <code>/notes</code> (comments) need a token.</p>
+<h2>Container resource limits (memory)</h2>
+<ul><li>Container memory cap is <strong>512 MiB</strong> (<code>memory.max</code>); the gateway itself sits at</li></ul>
+<p><strong>~300–320 MiB</strong> RSS. The host is small (1.9 GiB total, swap ~600 MiB of 1 GiB used), so the cgroup is routinely pinned at the ceiling (<code>memory.events: max</code> in the hundreds).</p>
+<ul><li>Symptom of a spike: the gateway dies <strong>uncleanly — SIGKILL, no shutdown path</strong></li></ul>
+<p>(<code>exited UNCLEANLY (no exit path ran — SIGKILL / OOM / VM death)</code>), sessions lose their turn, gateway restarts every few minutes and the restart-loop breaker trips. Container-internal <code>oom_kill</code> stays <strong>0</strong> — the kill comes from the host, so the gateway log cannot explain it.</p>
+<ul><li><strong>Rule: run heavy local reads through <code>tools/memcap.py &lt;MiB&gt; &lt;cmd&gt;</code></strong> (sets</li></ul>
+<p>RLIMIT_AS/RLIMIT_DATA on the child, prints peak RSS + wall). A runaway command then dies alone instead of taking the gateway down.</p>
+<ul><li><strong>Measured (cap 96 MiB)</strong>: naive <code>read().splitlines()</code> of a 20 MB JSONL →</li></ul>
+<p><code>MemoryError</code>; streaming line iteration → ok, <strong>7.2 MiB</strong> peak. Naive <code>sqlite3 ... fetchall()</code> over <code>state.db</code> messages (310 MB db) → <code>MemoryError</code> at 88 MiB peak. So: never <code>fetchall()</code> a big table, never <code>read()</code> a big file — iterate, filter in SQL, or chunk.</p>
+<ul><li>Caps apply to virtual address space, so they are stricter than RSS — expect</li></ul>
+<p>failures before RSS alone would suggest trouble.</p>
+<h2>kTLS in this container — SOLVED: set the TLS ULP first (2026-10-11)</h2>
+<p>Earlier entries here claimed kTLS was unavailable and then that the cause was undecidable. Both were wrong, and the reason matters more than the error: <strong><code>setsockopt(SOL_TLS, TLS_TX, …)</code> without the TLS ULP never reaches the TLS code at all</strong>, and the socket layer answers the generic ENOPROTOOPT (92) — the same errno an unknown level <code>31337</code> returns, which is why the negative looked like a kernel property.</p>
+<p>Measured locally on kernel <code>6.8.0-136-generic</code>, Alpine 3.25 container, <code>tls</code> module loaded:</p>
+<pre><code class="language-python">srv = socket.socket(); srv.bind((&quot;127.0.0.1&quot;, 0)); srv.listen(1)
+c = socket.create_connection(srv.getsockname()); p, _ = srv.accept()
+c.setsockopt(socket.IPPROTO_TCP, TCP_ULP, b&quot;tls\x00&quot;)   # documented step, must be ESTABLISHED
+c.setsockopt(282, 1, crypto_info)                       # SOL_TLS, TLS_TX -&gt; accepted
+c.sendall(b&quot;marker&quot;); raw = p.recv(4096)
+# -&gt; b&#x27;\x17\x03\x03\x00-&#x27; (application_data record), plaintext not visible in transit</code></pre>
+<p><code>TCP_ULP=tls</code> is itself refused with <strong>107 ENOTCONN</strong> on an unconnected socket — <code>tls_init(sk)</code> (the ULP's <code>.init</code>) requires <code>TCP_ESTABLISHED</code> before it creates the <code>tls_context</code> and swaps <code>sk_prot</code>.</p>
+<p><strong>Consequence:</strong> kTLS is exercisable both here and on GitHub-hosted runners (confirmed on ubuntu-24.04 / kernel 6.17 and ubuntu-22.04 / kernel 6.8). The <code>auto/ktls</code> build probe and the runtime probe are both viable; the earlier "container cannot do this" line is retracted.</p>
+<h2>Context7 (library/kernel docs lookup) — keyless, works from here</h2>
+<p>Verified 2026-10-11 from this container, no MCP server and no API key needed:</p>
+<pre><code>curl -s &quot;https://context7.com/api/v1/search?query=&lt;url-encoded query&gt;&quot;          # library search -&gt; JSON {results:[{id,title,totalTokens,stars,...}]}
+curl -s &quot;https://context7.com/api/v1/&lt;id-without-leading-slash&gt;?type=txt&amp;topic=&lt;topic&gt;&amp;tokens=&lt;n&gt;&quot;   # docs text for one library</code></pre>
+<ul><li><code>id</code> comes with a leading slash (<code>/websites/kernel_doc_html</code>); drop it in the docs URL path.</li><li>Corpora that answered well: <code>/websites/kernel_doc_html</code> (Linux kernel docs — kTLS, TLS_TX/TLS_RX, sendfile). Returns real doc excerpts with <code>Source:</code> URLs, so a claim taken from it is citable.</li><li>Corpus that did NOT answer: <code>/openssl/openssl</code> — zero hits for <code>SSL_sendfile</code>, <code>kTLS</code>, <code>TLS_TX</code> on every topic tried (its index is mostly QUIC design docs and man sources). Do not assume Context7 covers OpenSSL APIs.</li><li>Relevance ranking is weak: a <code>topic=ktls</code> query mixes in livepatch and list macros. Grep the returned text for the term you actually need instead of trusting the order.</li><li><strong>Size is driven by <code>--tokens</code> and nothing else caps it</strong> (measured on <code>kernel_doc_html</code>, topic "TLS_TX sendfile"): 500 tokens → 2 095 B / 62 lines; 2 000 → 7 383 B / 206; 4 000 → 12 457 B / 376; 8 000 → 21 681 B / 675; 16 000 → 39 113 B / 1 202. That is <strong>2.4–4.2 bytes per requested token</strong>, so a large value dumps a whole corpus into the context. <code>--grep</code> cut the same 4 000-token answer from 12 457 B to 3 806 B (3.3×).</li><li><strong>The wrapper is the guard</strong>: <code>--max-lines</code> (120) and <code>--max-bytes</code> (12 000) are enforced, <code>--tokens</code> is clamped at 20 000, every truncation prints the original size on stderr, and each call ends with <code>returned N bytes / M lines</code>. Raise a cap only deliberately.</li><li>No MCP server is configured in this Hermes profile; the plain HTTP API is enough for one-off lookups. If a durable tool is wanted, add Context7 as an MCP server rather than wrapping curl.</li></ul>
+<h2>Related</h2>
+<ul><li><code>engineering/scaleway-benchmark-plan.md</code> — benchmark infra (Scaleway, per-min).</li><li><code>engineering/zen-review-architecture.md</code> — gh_cache/zen_review (GitHub+GitLab).</li></ul>
+<script src="/freeunit-kb/assets/kb.js"></script>
+</body></html>

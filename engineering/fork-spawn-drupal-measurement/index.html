@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>engineering/fork-spawn-drupal-measurement</title>
+<link rel="stylesheet" href="/freeunit-kb/assets/kb.css">
+</head><body>
+<nav class="crumbs"><a href="/freeunit-kb/index.html">index</a> / engineering/fork-spawn-drupal-measurement</nav>
+
+<h1>engineering/fork-spawn-drupal-measurement</h1>
+<table class="meta"><tr><th>date</th><td>2026-09-12 · <strong>Status:</strong> measured live on a rootless unitd 1.36.1 + PHP 8.4.25</td></tr><tr><th>artifacts</th><td><code>tools/artisan_stubs/fork_spawn.php</code>, <code>tools/artisan_stubs/drupal_boot_cron.php</code>,</td></tr></table>
+<h1>fork-spawn × Drupal: measured (kernel+cron, and the stub tick)</h1>
+<p><strong>Date:</strong> 2026-09-12 · <strong>Status:</strong> measured live on a rootless unitd 1.36.1 + PHP 8.4.25 <strong>Artifacts:</strong> <code>tools/artisan_stubs/fork_spawn.php</code>, <code>tools/artisan_stubs/drupal_boot_cron.php</code>, <code>tools/artisan_stubs/drupal_stub.py</code> · <strong>Stand:</strong> <code>tools/setup-fu-stand.sh</code> / <code>start-fu-stand.sh</code></p>
+<p>Two questions, both answered with real numbers:</p>
+<ol><li>does a <strong>real</strong> Drupal bootstrap (<code>DrupalKernel</code> + <code>\Drupal::service('cron')-&gt;run()</code>)</li></ol>
+<p>run in the fork child, and how much does the <strong>warm opcache</strong> buy?</p>
+<ol><li>what does switching the Drupal stub tick from a <strong>cold <code>drush</code> spawn</strong> to the</li></ol>
+<p><strong>fork-spawn endpoint</strong> change <strong>per tick</strong>?</p>
+<h2>Setup</h2>
+<ul><li>Unit 1.36.1 (rootless, <code>--otel</code> build), PHP 8.4.25 + opcache, <code>options.file</code> php.ini</li></ul>
+<p>(<code>opcache.enable=1</code>, <code>enable_cli=1</code>, <code>validate_timestamps=0</code>).</p>
+<ul><li>Drupal 11.4.6 on SQLite, site FUTest.</li><li>PHP app <code>spawnapp</code> (<code>fork_spawn.php</code>, <code>spare:1 max:1 idle_timeout:0</code>) on 127.0.0.1:8816,</li></ul>
+<p><code>?job=cron|queue|sleep</code>.</p>
+<ul><li>Trigger: <code>curl 'http://127.0.0.1:8816/?job=cron'</code> — the HTTP request returns at once,</li></ul>
+<p>the job runs in a detached fork child.</p>
+<h2>Measurement 1 — real kernel + cron in the fork child</h2>
+<p><code>drupal_boot_cron.php</code> = <code>autoload.php</code> → <code>DrupalKernel::createFromRequest(...,'prod')</code> → <code>boot()</code> → <code>preHandle()</code> → <code>\Drupal::service('cron')-&gt;run()</code>, returning <code>cron_ok</code>.</p>
+<p><strong>Cold = fresh CLI process</strong> (what <code>drush core:cron</code> costs structurally), cached_scripts=592, hits=0:</p>
+<table><thead><tr><th>run</th><th>autoload_s</th><th>kernel_s</th><th>cron_s</th><th>total_s</th></tr></thead><tbody><tr><td>A</td><td>0.0197</td><td>0.2195</td><td>0.9062</td><td>1.1454</td></tr><tr><td>B</td><td>0.0218</td><td>0.1117</td><td>0.3106</td><td>0.4441</td></tr><tr><td>C</td><td>0.0161</td><td>0.1052</td><td>0.2727</td><td>0.3940</td></tr></tbody></table>
+<p><strong>Warm = fork child of the Unit worker</strong> (same SHM, ticks 3 s apart):</p>
+<table><thead><tr><th>tick</th><th>autoload_s</th><th>kernel_s</th><th>cron_s</th><th>total_s</th><th>cached</th><th>hits</th><th>trigger HTTP</th></tr></thead><tbody><tr><td>1 (fills opcache)</td><td>0.0164</td><td>0.1046</td><td>0.2922</td><td>0.4132</td><td>593</td><td>1</td><td>3.4 ms</td></tr><tr><td>2</td><td>0.0002</td><td>0.0125</td><td>0.0397</td><td>0.0524</td><td>593</td><td>594</td><td>10.5 ms</td></tr><tr><td>3</td><td>0.0002</td><td>0.0094</td><td>0.0372</td><td>0.0468</td><td>593</td><td>1187</td><td>3.7 ms</td></tr><tr><td>4</td><td>0.0003</td><td>0.0121</td><td>0.0373</td><td>0.0496</td><td>593</td><td>1780</td><td>3.9 ms</td></tr></tbody></table>
+<p><strong>Effect of the warm opcache:</strong> total ≈0.42 s → <strong>≈0.049 s</strong> (≈8.5×), kernel 0.11 → 0.011 (≈10×), cron 0.29 → 0.038 (≈7.5×). <code>cron_ok=true</code>, <code>cron_result=true</code>.</p>
+<p>Two facts behind those two numbers:</p>
+<ul><li><code>cached_scripts</code> freezes at <strong>593</strong> across ticks while <code>hits</code> grows monotonically</li></ul>
+<p>(1 → 594 → 1187 → 1780): every child compiles <strong>nothing</strong> new and everything it runs is a hit — the opcache SHM is genuinely shared between the worker, its forks and siblings.</p>
+<ul><li><strong>Tick 1 is not cheaper than cold</strong> (0.41–0.48 s): the first child still pays the compile</li></ul>
+<p>of ~592 files into the SHM. The win starts at tick 2 and is permanent thereafter (idle_timeout:0 keeps that SHM alive as long as one worker lives).</p>
+<h2>Measurement 2 — stub tick: cold <code>drush</code> vs fork-spawn endpoint</h2>
+<p><code>drupal_stub.py</code> got a <code>TRIGGER</code> switch (<code>drush</code> default | <code>http</code>), each tick logging its own latency; <code>CRON_INTERVAL=3</code> so ticks are frequent enough to sample.</p>
+<table><thead><tr><th>tick</th><th><code>TRIGGER=http</code> (fork-spawn)</th><th><code>TRIGGER=drush</code> (cold CLI per tick)</th></tr></thead><tbody><tr><td>1</td><td>0.0185 s</td><td>0.9688 s</td></tr><tr><td>2</td><td>0.0043 s</td><td>0.5214 s</td></tr><tr><td>3</td><td>0.0040 s</td><td>0.5177 s</td></tr><tr><td>4</td><td>0.0042 s</td><td>0.5360 s</td></tr><tr><td>5</td><td>0.0040 s</td><td>—</td></tr></tbody></table>
+<p><strong>Effect per tick: 0.52 s → 0.004 s (≈130×)</strong>, and qualitatively different: the drush-mode tick <strong>blocks</strong> for PHP start + cold opcache fill + kernel + cron (a real <code>drush</code> adds its own bootstrap on top, so the shim is a lower bound), while the HTTP tick returns in ~4 ms and the job continues in the background child. A 3 s interval with a 0.52 s tick is 17 % of every period spent blocked; at 4 ms it is 0.13 %.</p>
+<h2>Measurement 3 — the stub tick with <strong>real Drush 13.8.0</strong></h2>
+<p>Drush is no longer shipped as a phar: it is a Composer package <strong>installed inside the site</strong> (<code>composer require --dev drush/drush</code>; Composer itself needs <code>ext-phar</code>, which Alpine splits out of <code>php84</code> — extract <code>phar.so</code> from <code>php84-phar-<em>.apk</code> next to the other module <code>.so</code> files). Drush 13 refuses a global install ("must be installed inside a Drupal site"), and against a tree that only </em>looks* like a project its preflight aborts with <code>Package "drupal/core" is not installed</code>.</p>
+<table><thead><tr><th>what</th><th>wall clock</th></tr></thead><tbody><tr><td><code>drush core:cron</code>, standalone (3 runs)</td><td>1.05 / 0.95 / 0.93 s</td></tr><tr><td>stub tick, <code>TRIGGER=drush</code> real Drush (5 ticks)</td><td>1.18 / 0.69 / 0.72 / 0.71 / 0.66 s</td></tr><tr><td>stub tick, <code>TRIGGER=http</code> fork-spawn (5 ticks, same session)</td><td>0.0040 / 0.0046 / 0.0043 / 0.0043 / 0.0041 s</td></tr></tbody></table>
+<p>Same stand, same session ⇒ <strong>≈0.70 s vs ≈0.004 s ≈ 175×</strong> per tick. The earlier 0.52 s cold-CLI shim was a genuine <strong>lower bound</strong>: real Drush adds ≈0.45 s of its own bootstrap (container + console + preflight) on top of the PHP start.</p>
+<h2>Measurement 4 — queue drain (<code>queue:run</code>) cold vs warm</h2>
+<p>A real queue with a known per-item cost: harness module <code>fu_queue_test</code> (one <code>#[QueueWorker]</code>, 1 ms sleep + a small CPU loop per item — so the work is separable from the tick's own cost), 50 items per drain, refilled before every run.</p>
+<table><thead><tr><th>mode</th><th>wall clock</th><th>items</th></tr></thead><tbody><tr><td>cold CLI (<code>drupal_boot_queue.php</code>)</td><td>0.31 / 0.26 / 0.27 s</td><td>50</td></tr><tr><td>real <code>drush queue:run fu_queue_test</code></td><td>0.69 / 0.68 / 0.67 s (Drush itself reports 0.18–0.19 s of queueing)</td><td>50</td></tr><tr><td>warm fork, HTTP trigger <code>?job=queue&amp;name=…&amp;limit=50</code></td><td>0.0055 / 0.0045 / 0.0072 / 0.0034 s (trigger only)</td><td>50</td></tr></tbody></table>
+<p>Child-side timing of the warm ticks: <code>kernel_s</code> 0.006–0.007, <code>queue_s</code> 0.170–0.196, <code>total_s</code> 0.177–0.203, <code>cached_scripts</code> 623, <code>hits</code> 2048 → 4562, <code>queue_ok=true</code>.</p>
+<p>Reading: the tick's <strong>own</strong> cost (bootstrap) collapses and the trigger returns in ms, while the <strong>work itself barely moves</strong> — 50 items cost ≈0.18 s in every warm child (≈3.6 ms/item: the harness's 1 ms plus SQLite claim/delete round-trips). Warm opcache cannot make queue I/O cheaper; it only removes the per-tick start-up that used to be paid <em>on top</em> of it (0.26 s cold CLI, 0.68 s Drush).</p>
+<h2>Memory footprint of a tick</h2>
+<p><code>smaps_rollup</code> taken while a child was alive (<code>?job=sleep&amp;secs=8</code>), plus <code>/usr/bin/time %M</code> for the one-shot processes:</p>
+<table><thead><tr><th>process</th><th>RSS</th><th>PSS</th><th>private anon</th><th>shared</th></tr></thead><tbody><tr><td>Unit worker (parent, warm)</td><td>16.1 MB</td><td>6.0 MB</td><td>2.4 MB</td><td>1.7 MB shmem</td></tr><tr><td>fork child, alive</td><td>11.0 MB</td><td>3.4 MB</td><td>2.4 MB</td><td>0.2 MB shmem</td></tr><tr><td>cold CLI process (drain 50)</td><td>36.0 MB peak</td><td>—</td><td>—</td><td>—</td></tr><tr><td>real Drush process (<code>queue:run</code>)</td><td>56.6 MB peak</td><td>—</td><td>—</td><td>—</td></tr></tbody></table>
+<p>A warm child adds ≈11 MB RSS on top of the parent's already-resident opcache pages (≈3.4 MB PSS, mostly shared): it does <strong>not</strong> re-pay the 36/57 MB a cold CLI / Drush process costs, and N children share one opcache SHM.</p>
+<h2>Bug found while measuring: <code>exit()</code> does not kill a fork child</h2>
+<p>With <code>exit(0)</code> in the children, <strong>each tick leaked 2 processes</strong> (the intermediate <em>and</em> the worker): inside a Unit PHP worker, <code>exit()</code> returns control to Unit's event loop instead of terminating, so the child keeps <code>poll()</code>ing and lives on as an extra "application" worker — it even accepts further requests (observed: process count 32 → 48 in 16 s; a leaked child served the health request of the next session).</p>
+<p>Fix, verified (<code>fork_spawn.php</code>):</p>
+<ul><li>children die by <code>posix_kill(getmypid(), SIGKILL)</code> (<code>zap()</code>), never <code>exit()</code>;</li><li>the request process reaps what it killed: <code>reap()</code> (<code>pcntl_waitpid(-1, …, WNOHANG)</code> drain)</li></ul>
+<p><strong>before</strong> forking (clears the previous tick) and again after <code>usleep(2000)</code> (the SIGKILLed intermediate would otherwise stay a zombie held by the long-lived worker).</p>
+<p>After the fix: process count flat, <strong>0 zombies</strong> across 13 consecutive ticks; the ~2 ms reap sleep is inside the measured 3.4–4 ms trigger latency.</p>
+<h2>Restart hygiene (cost 2 wasted runs)</h2>
+<p><code>pkill</code>-ing only the unitd <strong>main</strong> leaves controller/router/prototype/workers orphaned to init; they keep the listening socket and the next unitd dies with <code>bind(127.0.0.1:8816) failed (98: Address in use)</code> — the config then never applies and all requests go to the stale tree. <code>start-fu-stand.sh</code> now kills every <code>unit:</code> process and waits until the port is bindable before exec'ing unitd.</p>
+<p>Also: <code>opcache.validate_timestamps=0</code> means <strong>editing a stub needs a unitd restart</strong> — a running worker will keep serving the old compiled script.</p>
+<h2>Reproduce</h2>
+<ul><li><code>bash tools/setup-fu-stand.sh /tmp/fu-pkgs</code> (rebuild after /tmp is wiped; patchelf RUNPATH)</li><li><code>bash tools/start-fu-stand.sh /tmp/fu-pkgs</code> (port 8816)</li><li>cold baseline: <code>php84 -c php.ini apps/drupal_boot_cron.php</code> (prints timing JSON on stderr)</li><li>warm: 4× <code>curl 'http://127.0.0.1:8816/?job=cron'</code>, read <code>cron_boot.out</code> / <code>spawn.out</code></li><li>stub: python app <code>drupal_stub</code> with <code>TRIGGER=http|drush</code>, <code>CRON_INTERVAL=3</code>, <code>STUB_LOG=…</code></li></ul>
+<h2>Caveats</h2>
+<ul><li>Single-site stand (SQLite, no realistic content volume): the kernel/cron split is</li></ul>
+<p>representative, absolute cron time is not.</p>
+<ul><li>The trigger returns <strong>before</strong> the job finishes → the job outlives the request and nothing</li></ul>
+<p>supervises it; at-least-once needs a lock/dedup (Drupal's own queue lease or a lockfile).</p>
+<ul><li><code>\Drupal::service('cron')-&gt;run()</code> re-enters the site's own state; concurrent ticks (two</li></ul>
+<p>triggers inside the same cron-window) are not deduplicated here.</p>
+<h2>Related</h2>
+<ul><li><code>fork-spawn-php.md</code> — the pattern itself; now with the <code>zap()</code> termination rule.</li><li><code>opcache-inprocess-fork.md</code> — why workers share opcache (prototype+fork) and why exec'd</li></ul>
+<p>children do not.</p>
+<ul><li><code>drupal-cron-queue-stub.md</code> — the stub's two trigger transports.</li><li><code>freeunit-1361-rootless-live-test.md</code> — the rootless stand this was measured on.</li></ul>
+<script src="/freeunit-kb/assets/kb.js"></script>
+</body></html>

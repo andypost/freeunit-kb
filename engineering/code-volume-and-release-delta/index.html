@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>engineering/code-volume-and-release-delta</title>
+<link rel="stylesheet" href="/freeunit-kb/assets/kb.css">
+</head><body>
+<nav class="crumbs"><a href="/freeunit-kb/index.html">index</a> / engineering/code-volume-and-release-delta</nav>
+
+<h1>engineering/code-volume-and-release-delta</h1>
+
+<h1>FreeUnit — code volume and per-release delta (measured 2026-10-05)</h1>
+<p>Scope: what each FreeUnit release added, measured against the previous release tag, and how the code base grew/split between runtime code, unit tests and integration tests. All numbers come from the <code>freeunitorg/freeunit</code> clone (tags fetched) plus GitHub merge/close timestamps — no estimates.</p>
+<h2>Method &amp; definitions</h2>
+<ul><li><strong>Release window</strong> = <code>previous_tag..tag</code>, boundaries = <strong>committer date</strong> of the</li></ul>
+<p>tag commit (the annotated tag date is not the release date; 1.37.0's tag object is dated 2026-10-04 while the release-prep commit keeps its author date 2026-09-25 — always use <code>%cd</code>).</p>
+<ul><li><strong>Churn</strong> = <code>git diff --numstat prev..tag</code> summed (insertions + deletions; a line</li></ul>
+<p>changed twice counts twice). <strong>Net</strong> = <code>git diff --shortstat</code> (text files only; binary and rename-only entries are dropped by numstat: 726 text vs 786 total files for the whole era).</p>
+<ul><li><strong>LOC</strong> = <code>pygount --format=json</code> (pygount 3.2.0) <code>codeCount</code>, i.e. source lines</li></ul>
+<p>with blanks, comments and string-only lines removed. Snapshots extracted with <code>git archive &lt;tag&gt; | tar -x</code>.</p>
+<ul><li><strong>Commits</strong> = <code>git rev-list --count prev..tag</code>.</li><li><strong>PR / issues</strong> = <code>gh pr list --state merged --json mergedAt</code> (381 rows, well under</li></ul>
+<p>the 1000 cap → not truncated) and <code>gh issue list --state all</code> (131 rows), bucketed by <code>mergedAt</code> / <code>closedAt</code> / <code>createdAt</code>.</p>
+<ul><li>Tags used: <code>1.35.0</code> (upstream NGINX Unit, 2025-08-26) as baseline, then</li></ul>
+<p><code>v1.35.1</code>, <code>1.35.2</code>, <code>1.35.3</code>, <code>1.35.4</code>, <code>1.35.5</code>, <code>1.36.0</code>, <code>1.36.1</code>, <code>1.37.0</code>.</p>
+<h2>Code-size split (pygount code lines)</h2>
+<table><thead><tr><th>Category</th><th>1.35.1 (03.04.26)</th><th>1.37.0 (04.10.26)</th><th>Δ</th></tr></thead><tbody><tr><td>runtime C (<code>src/</code> без <code>src/test/</code>)</td><td>65 614</td><td><strong>70 682</strong></td><td>+5 068 (+7.7%)</td></tr><tr><td>unit tests C (<code>src/test/</code>)</td><td>3 020</td><td><strong>17 796</strong></td><td>+14 776 (×5.9)</td></tr><tr><td>integration tests Python (<code>test/</code>)</td><td>15 400</td><td><strong>27 162</strong></td><td>+11 762 (+76%)</td></tr><tr><td>unitctl Rust (<code>tools/</code>)</td><td>3 657</td><td><strong>4 889</strong></td><td>+1 232 (+34%)</td></tr><tr><td>docs / pkg / CI / meta</td><td>6 065</td><td><strong>7 628</strong></td><td>+1 563</td></tr><tr><td><strong>tree total</strong></td><td><strong>107 805</strong></td><td><strong>142 666</strong></td><td>+34 861 (+32%)</td></tr></tbody></table>
+<p>Composition shares of tree code: runtime C 60.9% → 49.6%; tests (C+Python) 17.1% → <strong>31.5%</strong>; tests-to-runtime ratio 0.28 → <strong>0.64</strong>. Physical-line anchor (all lines, both trees): runtime core 147 010 → 165 956; tree total 213 504 → 306 414.</p>
+<p>Other languages in the 1.37.0 tree (code lines): C 89 931, Python 23 598, Java 12 426, Rust 5 818, YAML 5 642, JavaScript 1 619, Bash 1 023, C++ 714. <code>src/</code> outside <code>src/test/</code> also carries the Java module (22 143 physical lines) and <code>src/otel</code> (Rust) — "runtime C" above is the C/H part only.</p>
+<h2>Per-release churn, split runtime vs tests</h2>
+<table><thead><tr><th>Release</th><th>days</th><th>commits</th><th>PR merged</th><th>issues closed</th><th>runtime C</th><th>unit tests C</th><th>integration tests</th><th>unitctl</th><th>meta</th><th>total</th></tr></thead><tbody><tr><td>1.35.1</td><td>220\*</td><td>30</td><td>4</td><td>0</td><td>+4/−1</td><td>+2/−2</td><td>+15/−1</td><td>0</td><td>+698/−373</td><td>+719/−377</td></tr><tr><td>1.35.2</td><td>0</td><td>41</td><td>11</td><td>0</td><td>+1 123/−36</td><td>0</td><td>+647/−0</td><td>+20/−20</td><td>+762/−265</td><td>+2 552/−321</td></tr><tr><td>1.35.3</td><td>2</td><td>6</td><td>1</td><td>0</td><td>0</td><td>0</td><td>0</td><td>+7/−9</td><td>+800/−106</td><td>+807/−115</td></tr><tr><td>1.35.4</td><td>23</td><td>41</td><td>13</td><td>0</td><td>+19/−12</td><td>0</td><td>+797/−21</td><td>0</td><td>+1 519/−651</td><td>+2 335/−684</td></tr><tr><td>1.35.5</td><td>29</td><td>9</td><td>12</td><td>5</td><td>+225/−20</td><td>0</td><td>+1 012/−34</td><td>+26/−19</td><td>+3 580/−230</td><td>+4 843/−303</td></tr><tr><td>1.36.0</td><td>48</td><td>139</td><td>56</td><td>4</td><td>+4 795/−2 678</td><td>+1 335/−0</td><td>+6 063/−47</td><td>+1 473/−1 585</td><td>+5 368/−1 271</td><td>+19 034/−5 581</td></tr><tr><td>1.36.1</td><td>42</td><td>99</td><td>69</td><td>9</td><td>+4 632/−1 366</td><td>+2 769/−7</td><td>+3 788/−60</td><td>+148/−13</td><td>+1 656/−155</td><td>+12 993/−1 601</td></tr><tr><td>1.37.0</td><td>36</td><td>314</td><td>211</td><td>68</td><td>+21 721/−9 457</td><td>+26 390/−691</td><td>+16 211/−969</td><td>+2 483/−706</td><td>+9 445/−699</td><td>+76 250/−12 522</td></tr><tr><td><strong>Σ</strong></td><td>184</td><td><strong>679</strong></td><td><strong>377</strong></td><td><strong>86</strong></td><td>+32 519/−13 570</td><td>+30 496/−700</td><td>+28 533/−1 132</td><td>+4 157/−2 352</td><td>+23 828/−3 750</td><td>+119 533/−21 504</td></tr></tbody></table>
+<p>\* 1.35.1 row is the gap from upstream 1.35.0 (Aug 2025) to the first FreeUnit release, so its "days" is not a FreeUnit cycle.</p>
+<p>Per-release commit counts are the <strong>uncapped</strong> <code>git rev-list --count</code> (the digest's commit list is capped at 40 and must never be used as a count).</p>
+<p>Era totals: <strong>679 commits</strong>, <strong>377 merged PRs</strong>, <strong>86 issues closed</strong> (131 opened, 45 still open), churn Σ +119 533/−21 504, <strong>net +114 747/−16 718</strong> over 786 files. Churn exceeds net by 4 786 per side — exactly the lines rewritten in more than one release window (Σadd−Σdel = net add−net del = +98 029, so the two views agree).</p>
+<p>Only 4 PRs have been merged since 1.37.0 (window still open at measurement time).</p>
+<h2>Fraction of the code base (the headline ratios)</h2>
+<ul><li>1.37.0 cycle: churn 88 772 lines = <strong>126% of the runtime C base</strong> (70 682), 62% of</li></ul>
+<p>the tree; net additions +63 728 = <strong>90% of the runtime C base</strong>.</p>
+<ul><li>1.37.0 insertions are <strong>55.9% tests</strong> (42 601 of 76 250): src/test +26 390,</li></ul>
+<p>test/ +16 211.</p>
+<ul><li>Whole era (1.35.0 → 1.37.0): net +98 029 = <strong>139% of runtime C</strong>, 69% of the tree;</li></ul>
+<p>churn 141 037 = <strong>200% of runtime C</strong>.</p>
+<ul><li>Yet runtime C grew only <strong>+7.7%</strong> in the same era. The code base rewrote itself</li></ul>
+<p>roughly twice over to add ~5k net lines of runtime code — churn is dominated by rework and by the test suite, not by new runtime code.</p>
+<h2>Validation performed</h2>
+<ol><li>Per-interval <code>rev-list --count</code> sums to 679 = <code>rev-list --count 1.35.0..1.37.0</code>. ✓</li><li>Per-release PR buckets sum to the era total and the full <code>gh</code> list size</li></ol>
+<p>(4+373 = 377; +4 after 1.37.0 = 381 rows fetched). Issue buckets sum to 131 = all rows fetched → every issue in the tracker was created inside these windows. ✓</p>
+<ol><li>Category churn sums equal <code>git numstat 1.35.0..1.37.0</code> totals; the 60-file</li></ol>
+<p>difference against <code>--shortstat</code> is binary/rename-only entries. ✓</p>
+<ol><li>Two independent LOC measures agree in direction and are documented as a range:</li></ol>
+<p>pygount 70 682 vs a naive non-blank/non-comment counter 87 727 on the same <code>src/</code> (excluding tests) — the naive counter classifies some comment/blank constructs as code (+23% on <code>src/</code>, verified per-file on <code>nxt_router.c</code>: 5 586 vs 4 625 code lines). Quoted LOC is always pygount; physical-line counts are given separately as a third anchor.</p>
+<ol><li><code>gh</code> lists are below their fetch caps, so no silent truncation; timestamps are</li></ol>
+<p>server-side merge/close times, commit counts are git-side.</p>
+<h2>Caveats — what these numbers are not</h2>
+<ul><li>Churn ≠ growth. Additions+deletions double-count rework and throwaway edits; only</li></ul>
+<p>the net column describes growth.</p>
+<ul><li>LOC by language counts whole files: the Java module and <code>src/otel</code> live inside</li></ul>
+<p><code>src/</code>, so "runtime C" must be read as the C/H part of <code>src/</code> outside <code>src/test/</code>.</p>
+<ul><li>Release boundaries are committer dates: work merged after a tag but before the next</li></ul>
+<p>release lands in the next window, which is exactly why 1.37.0 (a batch-merge release day, 27 PRs merged on 2026-10-04) shows 211 PRs.</p>
+<ul><li>The 1.35.1 window spans the upstream-to-revival gap (Aug 2025 → Apr 2026) and is</li></ul>
+<p>not comparable to the later cycles.</p>
+<script src="/freeunit-kb/assets/kb.js"></script>
+</body></html>

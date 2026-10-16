@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FreeUnit Repositories</title>
+<link rel="stylesheet" href="/freeunit-kb/assets/kb.css">
+</head><body>
+<nav class="crumbs"><a href="/freeunit-kb/index.html">index</a> / repos</nav>
+
+<h1>FreeUnit Repositories</h1>
+<table class="meta"><tr><th>description</th><td>All FreeUnit repositories, forks and related projects</td></tr><tr><th>tags</th><td>freeunit, repos, github, forks</td></tr></table>
+<h1>FreeUnit Repositories</h1>
+<h2>Primary</h2>
+<table><thead><tr><th>Repository</th><th>Description</th><th>Default branch</th></tr></thead><tbody><tr><td><a href="https://github.com/freeunitorg/freeunit">freeunitorg/freeunit</a></td><td><strong>Main LTS fork</strong> of Unit in C</td><td><code>master</code></td></tr><tr><td><a href="https://github.com/andypost/unit">andypost/unit</a></td><td><strong>Personal fork</strong> for roadmap and drafts</td><td><code>roadmap</code></td></tr><tr><td><a href="https://github.com/nginx/unit">nginx/unit</a></td><td><strong>Upstream</strong> — archived Oct 2025</td><td>—</td></tr></tbody></table>
+<h2>FreeUnit v2</h2>
+<table><thead><tr><th>Project</th><th>Description</th><th>Status</th></tr></thead><tbody><tr><td>freeunit2 (PoC)</td><td>Rust orchestrator + NTS PHP workers</td><td>PoC complete (2026-06-15)</td></tr><tr><td>freeunit2-fnb</td><td>Request.id multiplex (single-in-flight fix)</td><td>—</td></tr><tr><td>freeunit2-a4v</td><td>"Fair three-way": v2 vs RoadRunner vs FrankenPHP</td><td>—</td></tr></tbody></table>
+<h2>Related</h2>
+<table><thead><tr><th>Repository</th><th>Description</th></tr></thead><tbody><tr><td>true-async/php-async</td><td>External PHP core extension (TrueAsync ABI). <strong>No FreeUnit dependency</strong>: the in-tree <code>#if NXT_PHP_TRUEASYNC</code> code path was REMOVED in 1.37.0 (commit b20aeb78). The old line <code>freeunitorg/trueasync-experiment</code> returns 404 — stale, do not cite.</td></tr></tbody></table>
+<h2>Branch structure of andypost/unit</h2>
+<ul><li><code>roadmap</code> — main (plans, drafts before PR to freeunitorg)</li><li><code>master</code> — upstream code</li><li><code>pre-1.35.6</code> — pre-release branch</li><li><code>claude/*</code> — AI-generated PRs</li><li><code>p*</code> — phased items (p1-graceful-signal-split, p2-listener-drain, ...)</li></ul>
+<script src="/freeunit-kb/assets/kb.js"></script>
+</body></html>

@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>RoadRunner v3.0.0 `jobs` vs FreeUnit `schedules` — a queue is not a cron</title>
+<link rel="stylesheet" href="/freeunit-kb/assets/kb.css">
+</head><body>
+<nav class="crumbs"><a href="/freeunit-kb/index.html">index</a> / engineering/roadrunner-v3-jobs-vs-freeunit-schedules</nav>
+<p class="banner warn">analysis</p>
+<h1>RoadRunner v3.0.0 `jobs` vs FreeUnit `schedules` — a queue is not a cron</h1>
+<table class="meta"><tr><th>description</th><td>Why RoadRunner's "jobs" plugin and FreeUnit's planned <code>schedules</code> solve different problems (broker-fed queue vs in-process timer); the three axes where v3.0.0's jobs does touch the FreeUnit plan (named worker pools, outcome metrics, trace continuity); and everything else RoadRunner v3.0.0 shipped.</td></tr><tr><th>tags</th><td>roadrunner, jobs, schedules, cron, queue, compare, pr452</td></tr><tr><th>updated</th><td>2026-10-09</td></tr><tr><th>resources</th><td>https://github.com/roadrunner-server/roadrunner/releases/tag/v3.0.0, https://github.com/freeunitorg/freeunit/pull/452, https://github.com/freeunitorg/freeunit/issues/443</td></tr><tr><th>created</th><td>2026-10-09 by SOUL. Sources: the RoadRunner v3.0.0 release notes</td></tr></table>
+<h1>RoadRunner v3.0.0 <code>jobs</code> vs FreeUnit <code>schedules</code> — a queue is not a cron</h1>
+<p><strong>Created:</strong> 2026-10-09 by SOUL. Sources: the RoadRunner v3.0.0 release notes (published 2026-10-08) and FreeUnit PR #452 / epic #443.</p>
+<h2>TL;DR</h2>
+<p>They are <strong>different axes</strong>, so a head-to-head "implementation" comparison is wrong. RoadRunner <code>jobs</code> is an <strong>event-driven queue consumer</strong> (jobs arrive from an external broker). FreeUnit <code>schedules</code> is a <strong>time-driven in-process timer</strong> (the server itself fires periodic internal requests into an app). RoadRunner v3.0.0 has <strong>no scheduler at all</strong> — <code>cron</code>, <code>scheduler</code>, <code>timer</code> and <code>time-based</code> appear <strong>zero</strong> times in its release notes. The thing FreeUnit's <code>schedules</code> competes with (a cron with no sidecar) RoadRunner does not ship.</p>
+<h2>RoadRunner <code>jobs</code> = queue/consumer</h2>
+<ul><li>Source = <strong>external broker</strong>: AMQP, SQS, Kafka, NATS, <strong>NSQ (new in v3)</strong>,</li></ul>
+<p>Redis, Beanstalk, memory.</p>
+<ul><li>A PHP worker pool <strong>consumes</strong> jobs; delivery is at-least-once with</li></ul>
+<p>retry / requeue / dead-letter semantics.</p>
+<ul><li>Concurrency = pool size. The <code>jobs</code> plugin in v3.0.0 adds **named worker</li></ul>
+<p>pools<strong> (a pipeline gets its own PHP pool, selected by a <code>pool</code> header), </strong>trace continuity<strong> (producer trace context preserved on RPC submit) and </strong>outcome metrics<strong> (success/failed/</strong>requeued** counted separately, <code>rr_jobs_jobs_requeue</code>).</p>
+<ul><li>RoadRunner's <em>cron</em> is a separate community plugin that spawns a shell command</li></ul>
+<p>per tick (a cold PHP each time) — the comparator FreeUnit's plan names. It is <strong>not</strong> part of the <code>jobs</code> plugin and <strong>not</strong> in v3.0.0's notes.</p>
+<h2>FreeUnit <code>schedules</code> = timer (PR #452, target 1.38.0)</h2>
+<ul><li>New top-level <code>"schedules"</code> object; FreeUnit sends **periodic internal</li></ul>
+<p>requests<strong> into an application — cron-like, </strong>no client and no sidecar**.</p>
+<ul><li>Config per schedule: <code>pass</code>, <code>uri</code>, <code>interval</code>, <code>jitter</code>, <code>timeout</code>,</li></ul>
+<p><code>overlap: skip</code>, <code>headers</code>. Validated by building the same request a run uses.</p>
+<ul><li>A run is a normal application request: it counts in <code>/status</code>, goes through</li></ul>
+<p><code>limits</code> and the app queue, and is written to the access log; an OTel span is created with telemetry on.</p>
+<ul><li><code>/status/schedules</code> shows per-schedule counters; a timed-out run records</li></ul>
+<p><code>last_status</code> 503 and the worker keeps its slot in <code>processes.max</code>.</p>
+<h2>Where the two touch (and still differ)</h2>
+<table><thead><tr><th>Theme</th><th>RoadRunner <code>jobs</code> v3</th><th>FreeUnit <code>schedules</code></th></tr></thead><tbody><tr><td>Trigger</td><td>broker message</td><td>time (<code>interval</code>/<code>jitter</code>)</td></tr><tr><td>Source</td><td>external broker</td><td>the server itself</td></tr><tr><td>Isolation</td><td><strong>named worker pools</strong> (pipeline → its own PHP pool, by <code>pool</code> header)</td><td>capacity separation <strong>by application</strong> (a second app, <code>processes: 1</code>, idle-reaper-exempt)</td></tr><tr><td>Metrics</td><td>success/failed/<strong>requeued</strong></td><td><code>/status/schedules</code> counters + <code>last_status</code></td></tr><tr><td>Tracing</td><td>producer trace continuity on submit</td><td>OTel span per run</td></tr><tr><td>Rescheduling</td><td>queue (retry/requeue/DLQ)</td><td>cron + <code>overlap: skip</code></td></tr></tbody></table>
+<p>The nearest RR analogue to the FreeUnit plan's "isolate jobs from traffic" is <strong>named worker pools</strong> — but RR separates <em>queues</em> into pools, while FreeUnit must separate by <em>application</em> because PHP targets share one app's processes.</p>
+<h2>Everything else in RoadRunner v3.0.0 (context)</h2>
+<ul><li><strong>Core:</strong> Go module <code>/v3</code>; Plugin API v6 (protobuf, <code>log/slog</code>, <code>pool/v2</code>,</li></ul>
+<p><code>goridge/v4</code>); Unix-socket attrs (mode/owner/group); <code>envfile</code> without experimental; <strong>Goridge v4 drops MessagePack</strong> (JSON/protobuf/Gob/raw remain); worker auto-scaling (<code>dynamic_allocator.max_workers</code>); default plugins add <strong>NSQ, HTTP rate limiting, Zstd, protoreg</strong>.</p>
+<ul><li><strong><code>http</code>:</strong> middleware order left→right; **cleartext HTTP/2 (H2C prior</li></ul>
+<p>knowledge; <code>Upgrade: h2c</code> removed)<strong>; </strong>PROXY protocol** v1/v2.</p>
+<ul><li><strong>Middleware:</strong> <code>rate_limiter</code> (global/IP/header, 429 + <code>Retry-After</code>),</li></ul>
+<p><code>zstd</code>, <code>static</code> (cache TTLs/limits, <code>rr reset static</code>), <code>proxy_ip_parser</code> trusted headers.</p>
+<ul><li><strong><code>grpc</code>:</strong> server reflection, <code>google.rpc.Status</code> error details.</li></ul>
+<p><strong><code>otel</code>:</strong> span-timing fix, <strong>Zipkin exporter removed</strong> (OTLP only).</p>
+<ul><li><strong><code>logger</code>:</strong> Go <code>slog</code>; <strong><code>lock</code>:</strong> Redis backend; <strong><code>redis</code>:</strong> Sentinel auth;</li></ul>
+<p><strong><code>status</code>:</strong> k8s <code>/livez</code>/<code>/readyz</code>; <strong><code>temporal</code>:</strong> heartbeat/dynamic workflows; <strong><code>velox</code>:</strong> modular build.</p>
+<ul><li><strong>Queue drivers:</strong> amqp (named connections, declaration controls), nats</li></ul>
+<p>(retention, <code>ack_wait</code>), kafka (requeue isolation — a retry is not republished to the source topic), sqs (FIFO retry), beanstalk (headers).</p>
+<h2>Verdict for FreeUnit</h2>
+<p>RR <code>jobs</code> is <strong>not a competitor to <code>schedules</code></strong> — one is a queue, the other a cron. The overlap is only <strong>pool isolation</strong> and <strong>metrics/tracing</strong>. The "scheduler without a sidecar" that <code>schedules</code> (#452) delivers, RoadRunner v3.0.0 does not offer. Useful as a design reference for #452 on two points: named worker pools (isolation by pipeline) and per-attempt outcome metrics.</p>
+<p>Related: <code>scheduled-tasks-plan.md</code>, <code>scheduled-tasks-app.md</code>.</p>
+<script src="/freeunit-kb/assets/kb.js"></script>
+</body></html>

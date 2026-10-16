@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>engineering/zen-quality-compare</title>
+<link rel="stylesheet" href="/freeunit-kb/assets/kb.css">
+</head><body>
+<nav class="crumbs"><a href="/freeunit-kb/index.html">index</a> / engineering/zen-quality-compare</nav>
+
+<h1>engineering/zen-quality-compare</h1>
+
+<h1>zen-quality: full-toolset vs limited-toolset review comparison (2026-09-03)</h1>
+<p>_Goal: measure how much review quality degrades when the agent (SOUL) is stripped of terminal/gh/web/search and LEFT WITH read_file (local KB) only. This is the "internal variant" quality gate — what can the coordinator actually deliver on trusted local context alone, vs with live repo access._</p>
+<p>Task under test: FreeUnit PR #254 "capability: keep running when capget() is filtered".</p>
+<h2>Metric</h2>
+<table><thead><tr><th>axis</th><th>full-toolset</th><th>limited (file only)</th></tr></thead><tbody><tr><td>can fetch PR diff</td><td>yes</td><td>NO</td></tr><tr><td>can read source in repo</td><td>yes</td><td>NO (only KB)</td></tr><tr><td>can verify a SPOT symbol</td><td>yes (rg + symbol index)</td><td>NO</td></tr><tr><td>can check CI/state</td><td>yes (gh)</td><td>NO</td></tr><tr><td>verdict grounded in CODE</td><td>yes</td><td>only in KB prose</td></tr><tr><td>risk of misled by stale doc</td><td>low</td><td>HIGH</td></tr><tr><td>honesty about limits</td><td>—</td><td>must state them</td></tr></tbody></table>
+<h2>Full-toolset baseline (this run, models on real diff)</h2>
+<ul><li>laguna-s-2.1-free: PARTIAL · NOT-CLEARED · RISK=medium</li><li>WHY: "correctly handles capget() filtering with a narrow errno check and</li></ul>
+<p>preserves the warning pre-daemonization, but diff truncated at 'Residual' and omits src/nxt_capability.c/h changes"</p>
+<ul><li>SPOT: "CHANGES describes app processes no longer inheriting unitd's</li></ul>
+<p>capabilities (clearing permitted/effective/inheritable/ambient after fork), but none of the shown diffs for nxt_capability.c / nxt_process.c / nxt_runtime.c include the capability-reduction logic" — a REAL potentially missing implementation or missing diff. Verifiable, concrete.</p>
+<ul><li>ling-3.0-flash-fin-free: (verdict missing this pass — retry) · PARTIALLY-CLEARED · RISK=medium</li></ul>
+<h2>Notes / bugs found this pass</h2>
+<ul><li>laguna SPOT field OVER-CAPTURED: bled <code>CONCLUSION=NOT-CLEARED RISK=medium</code></li></ul>
+<p>into SPOT value (parser didn't clamp SPOT to its own token). Fix: clamp SPOT the same way as VERDICT (split on \n/:: before storing).</p>
+<h2>Limited-toolset result</h2>
+<p>_Appended automatically when cron job 6cc7f3f97b7a fires (file-only, no terminal, no gh, no web). Compare: can it VERIFY the capability-clearing SPOT? Can it even state the diff is missing? Does it over-claim from KB prose alone?_</p>
+<p><strong>Job 6cc7f3f97b7a REMOVED 2026-09-10</strong> (admin cleanup; was disabled). Kept as a record of the limited-toolset experiment; output preserved at <code>/opt/data/cron/output/6cc7f3f97b7a.retired-20260910/</code>. Do not re-create unless re-running the experiment.</p>
+<script src="/freeunit-kb/assets/kb.js"></script>
+</body></html>

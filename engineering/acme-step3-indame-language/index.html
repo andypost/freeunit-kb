@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ACME Step 3 — in-daemon shim: Rust or Go?</title>
+<link rel="stylesheet" href="/freeunit-kb/assets/kb.css">
+</head><body>
+<nav class="crumbs"><a href="/freeunit-kb/index.html">index</a> / engineering/acme-step3-indame-language</nav>
+<p class="banner warn">analysis</p>
+<h1>ACME Step 3 — in-daemon shim: Rust or Go?</h1>
+<table class="meta"><tr><th>description</th><td>Evaluating the language for the in-daemon ACME shim. The decisive axis is challenge scope, not language — http-01/tls-alpn-01 need no DNS providers (Rust is fine); the 200-provider engine (dns-01/wildcards) is Go/lego and belongs in the sidecar, not the daemon.</td></tr><tr><th>tags</th><td>acme, tls, rust, go, lego, architecture</td></tr><tr><th>updated</th><td>2026-09-25</td></tr><tr><th>resources</th><td>https://github.com/go-acme/lego, https://github.com/djc/instant-acme, https://github.com/nginx/nginx-acme</td></tr></table>
+<h1>ACME Step 3 — in-daemon shim: Rust or Go?</h1>
+<p>Question (from @andypost): Step 3 of the ACME ladder was planned as an <strong>in-daemon Rust shim</strong>. Should it be <strong>Go</strong> instead?</p>
+<p>Short answer: <strong>the language is the wrong axis to decide first — scope is.</strong> Step 3's job (zero-config TLS in the daemon) is achievable with <strong>http-01</strong> (and later <strong>tls-alpn-01</strong>), neither of which needs DNS providers. Go's only real advantage — lego's 200+ DNS providers — applies to <strong>dns-01 / wildcards</strong>, which is exactly the part that should stay a <strong>sidecar</strong> (Step 2). So Go buys nothing for Step 3, and costs the daemon a Go runtime.</p>
+<h2>What each challenge actually needs</h2>
+<table><thead><tr><th>Challenge</th><th>Providers needed</th><th>Wildcards</th><th>In-daemon viable</th></tr></thead><tbody><tr><td>http-01</td><td><strong>none</strong></td><td>no</td><td>✅ today</td></tr><tr><td>tls-alpn-01</td><td><strong>none</strong></td><td>no</td><td>after modular TLS (X11)</td></tr><tr><td>dns-01</td><td><strong>200+ provider APIs</strong> + propagation polling</td><td><strong>yes</strong></td><td>❌</td></tr></tbody></table>
+<p>Only <strong>dns-01</strong> needs the provider engine — and dns-01 is the <em>only</em> path to wildcards (<code>*.example.com</code>). Everything else is provider-free.</p>
+<h2>The two ecosystems</h2>
+<p><strong>Rust</strong> — <code>instant-acme</code> (pure Rust, Tokio + rustls): full RFC 8555, http-01 / dns-01 / tls-alpn-01, ARI, EAB, profiles, revocation. <strong>But it ships no DNS provider catalog</strong> — dns-01 is "manual / external program" or acme-dns. <code>rustls-acme</code> / <code>tokio-rustls-acme</code> are TLS-ALPN-01 focused. Precedent: <strong>nginx's own ACME module (<code>nginx/nginx-acme</code>) is written in Rust</strong> (FFI into C nginx; Rust 1.81+, bindgen, libclang) — and it supports <strong>http-01 only</strong>, no dns-01, no wildcards (its issue #11).</p>
+<p><strong>Go</strong> — <code>go-acme/lego</code> <strong>as a library</strong> (<code>github.com/go-acme/lego/v5</code>): 200+ DNS providers, ARI, wildcards, http-01/tls-alpn-01/dns-01 + propagation polling. The CLI is a thin layer over the same library. Embedded by Traefik. This is the only place the 200-provider breadth exists as an importable engine.</p>
+<h3>Correction (2026-09-25): lego is a <strong>CLI tool</strong> — you do not embed it</h3>
+<p>Pointed out by @TuzelKO. lego ships as a standalone binary, and it already has the exact hook shape the certbot thin layer used. <strong>No custom Go code is needed for Step 2</strong> — the "sidecar" is simply the <strong>lego CLI + a deploy hook</strong>:</p>
+<pre><code class="language-sh"># v5: one command, `run` obtains or renews
+lego run --dns cloudflare -d &#x27;*.example.com&#x27; -d example.com \
+    --deploy-hook /usr/local/bin/lego-unit-hook.sh</code></pre>
+<ul><li><strong>v5 hooks:</strong> <code>--pre-hook</code>, <code>--deploy-hook</code>, <code>--post-hook</code> (<code>--run-hook</code> /</li></ul>
+<p><code>--renew-hook</code> renamed to <code>--deploy-hook</code> in v5; <code>renew</code> merged into <code>run</code>).</p>
+<ul><li>The hook receives <code>LEGO_HOOK_CERT_PATH</code>, <code>LEGO_HOOK_CERT_KEY_PATH</code>,</li></ul>
+<p><code>LEGO_HOOK_CERT_PEM_PATH</code>, <code>LEGO_HOOK_CERT_NAME</code> — concatenate cert+key and <code>PUT</code> to <code>/certificates/&lt;name&gt;</code> (the certbot hook, reused verbatim).</p>
+<ul><li>That is the whole Step 2: <strong>lego CLI + ~40-line hook</strong>, same pattern already</li></ul>
+<p>validated live with certbot — plus dns-01, wildcards and ARI for free.</p>
+<p>So "embed lego in a Go sidecar" is over-engineering. Compare: certbot (Python) does http-01 with a 13-provider DNS reach; <strong>lego (Go CLI) does 200+</strong>. The Go component is a <strong>binary you install and cron</strong>, not code you write or link.</p>
+<h2>The cost of Go <em>inside</em> unitd</h2>
+<p>If Step 3 must be in-daemon <strong>and</strong> carry providers, Go means embedding the Go runtime into the C daemon (<code>-buildmode=c-shared</code> / <code>c-archive</code>, dlopen). Known costs, all documented:</p>
+<ol><li><strong>Signals.</strong> The Go runtime installs its own handlers: <code>SIGURG</code> (async</li></ol>
+<p>preemption), <code>SIGSEGV</code> (panic), and it takes over most signals by default when embedded — e.g. intercepting <strong>SIGCHLD</strong> crashed host programs (golang/go#13042). Unit has its own event loop and careful signal handling (its SIGCHLD drives worker reaping); coexistence is fiddly and is a genuine regression surface.</p>
+<ol><li><strong>Threads / GC.</strong> Go runs its own scheduler threads and a GC heap inside</li></ol>
+<p>unitd; RSS roughly +few MB baseline and the GC does not promptly return memory to the OS.</p>
+<ol><li><strong>Build matrix.</strong> cgo cross-compilation needs a C toolchain per target; Unit</li></ol>
+<p>builds across many arches/distros incl. musl. This multiplies CI/packaging work that Rust (pure static, no cgo) or C does not add.</p>
+<p>Rust in-daemon (nginx's model) has none of 1–3: no runtime threads by default, no GC, no signal hijacking.</p>
+<h2>Verdict</h2>
+<ul><li><strong>Step 3 = in-daemon zero-config TLS → keep it Rust (or C).</strong> http-01 and</li></ul>
+<p>tls-alpn-01 need no providers, so lego's breadth is irrelevant here; Rust gives clean FFI + the nginx precedent, without importing a second runtime.</p>
+<ul><li>**dns-01 / wildcards → the lego CLI, as an external tool (Step 2), not in the</li></ul>
+<p>daemon.** No sidecar code to write: lego runs, its <code>--deploy-hook</code> <code>PUT</code>s the bundle. Reasons it stays out of unitd: DNS API credentials must not live in the daemon; the engine is ~85k Go LOC; propagation polling is a second subsystem.</p>
+<ul><li><strong>Do not put Go in unitd.</strong> The only way Go beats Rust is by supplying the</li></ul>
+<p>provider catalog — and that is precisely the part that belongs outside the daemon.</p>
+<h3>If they still want in-daemon + providers</h3>
+<p>Feasible via Go <code>c-shared</code>, and it would collapse Step 2 into Step 3 (one component, all providers, wildcards). But the price is a Go runtime inside unitd (signals, GC, threads) plus a cgo build matrix. If wildcards-in-one-binary is a hard requirement, prefer a <strong>Go sidecar</strong> with a socket — same providers, daemon stays clean — over linking Go into unitd.</p>
+<h3>Practical split (matches the existing plan)</h3>
+<table><thead><tr><th>Layer</th><th>Language</th><th>Challenges</th></tr></thead><tbody><tr><td>In-daemon shim (Step 3)</td><td>Rust/C</td><td>http-01, tls-alpn-01</td></tr><tr><td>Step 2 — <strong>lego CLI + deploy-hook</strong> (no custom code)</td><td>Go binary</td><td>dns-01, wildcards, ARI</td></tr></tbody></table>
+<p>This is also the honest reading of the ecosystem: Rust owns the <em>protocol client</em> in-process; Go owns the <em>provider engine</em> out-of-process.</p>
+<h2>Modular orchestration — Unit-owned renew (proposal, @TuzelKO)</h2>
+<p>Principle: keep Go out of unitd by invoking the ACME tool as a <strong>subprocess (CLI layer)</strong>; make the tool <strong>pluggable</strong>; let <strong>Unit own the lifecycle</strong> — periodically trigger renew, detect the cert changed, reload.</p>
+<p>Three pieces:</p>
+<ol><li><strong>Isolation.</strong> unitd <code>exec</code>s the tool; it never links Go. ✅ exactly the CLI</li></ol>
+<p>approach — no cgo, no Go runtime in the daemon.</p>
+<ol><li><strong>Modular contract.</strong> The "module" is any ACME client that can <em>install</em> the</li></ol>
+<p>result. The common denominator across tools is the <strong>deploy step</strong>: certbot <code>--deploy-hook</code>, lego (v5) <code>--deploy-hook</code>, acme.sh <code>--reloadcmd</code>. Contract = "run this command; it installs the cert" (via a Control-API <code>PUT</code> or into the cert store). Any tool that speaks it plugs in.</p>
+<ol><li><strong>Unit-owned loop.</strong> Schedule renew + change-detect + reload.</li></ol>
+<h3>What already exists vs what is missing</h3>
+<ul><li><strong>Exists:</strong> replacing a cert triggers a graceful reload (a same-name <code>PUT</code> —</li></ul>
+<p>Step 1, #456/#457), no restart; the cert store is a directory re-read on apply. So <em>reload-on-change</em> is solved.</p>
+<ul><li><strong>Missing: native periodic command execution.</strong> Unit has <strong>no</strong> "run a command</li></ul>
+<p>on a timer". <code>#452 schedules</code> does periodic <strong>HTTP requests to an application</strong>, not <code>exec</code>. And upstream <strong>#1528</strong> ("run commands alongside applications") was <strong>declined</strong> by the maintainer ("outside the scope of Unit"). So "Unit periodically triggers renew" is a <strong>new primitive</strong>, not a config toggle.</p>
+<h3>Two orchestrations</h3>
+<table><thead><tr><th>Model</th><th>Trigger</th><th>unitd change</th></tr></thead><tbody><tr><td><strong>Push</strong></td><td>external timer (cron/systemd) runs the tool → deploy-hook <code>PUT</code> → reload</td><td>none (today's thin layer)</td></tr><tr><td><strong>Pull</strong> (TuzelKO)</td><td>Unit schedules the command, watches the cert store, re-applies on change</td><td>needs the new primitive</td></tr></tbody></table>
+<h3>Options for the missing primitive</h3>
+<ul><li><strong>(a) external timer</strong> — ships today, no daemon change.</li><li><strong>(b) a narrow cert-lifecycle hook</strong> in Unit (ACME-specific: "run this issuer</li></ul>
+<p>command on this interval, re-apply on change"), <strong>not</strong> a general cron — this sidesteps the #1528 scope objection by keeping it to certificate management.</p>
+<ul><li><strong>(c) extend <code>#452 schedules</code></strong> to a <strong>command target</strong> (today app-requests</li></ul>
+<p>only) — reuses the scheduling machinery already in flight.</p>
+<h3>Security</h3>
+<p>Config-driven command execution is a <strong>new attack surface</strong>. The issuer command must be settable <strong>only through the root-owned control socket</strong> and must never be derived from request input. Treat it like a privilege boundary, not a convenience.</p>
+<p><strong>Recommendation:</strong> agree with the direction — the contract is the deploy step, isolation is the subprocess. The genuinely new bit is the <strong>scheduled-command primitive</strong>; scope it narrowly to cert lifecycle (or extend #452's scheduler to a command target) rather than adding a general command runner, which is the part upstream declined.</p>
+<h3>Refinement (@TuzelKO): drop the hook — exit code + self-check</h3>
+<p>Even simpler: Unit runs the CLI; on <strong>exit 0</strong> it re-scans its own certificates, compares them, and reloads the ones that changed. <strong>No <code>--deploy-hook</code> at all.</strong></p>
+<p>Why this is better: the hook exists only in the <em>push</em> model, because the tool had to reach Unit's Control API itself. In the <em>pull</em> model Unit reads the filesystem, so the contract shrinks to <strong>"a command that writes certificates into a known directory"</strong> — any CLI works, whether or not it has a hook (certbot/lego's <code>--deploy-hook</code>, acme.sh's <code>--reloadcmd</code> all become optional).</p>
+<p>Two constraints must be pinned for this to work:</p>
+<ol><li><strong>Cert file format / location.</strong> Unit's certificate objects want **privkey +</li></ol>
+<p>fullchain in one PEM<strong>; lego writes <code>cert.crt</code> and <code>cert.key</code> </strong>separately**. Either the command writes the combined PEM, or Unit learns to accept the split layout — a cert-store format decision, not free.</p>
+<ol><li><strong>Change detection = fingerprint, not mtime</strong>, followed by a **narrow</li></ol>
+<p>re-apply** (re-resolve the cert by name — the Step 1 / #457 machinery), not a full config re-apply.</p>
+<p>Still required either way: the <strong>scheduled-exec primitive</strong> (Unit must run the command on a timer). And exit 0 ≠ changed — a renew often no-ops — so the re-check-and-compare step is mandatory, exactly as noted.</p>
+<p>Net: the hook is a <em>push</em>-model artifact. The pull model replaces it with a filesystem read — fewer coupling points, fully tool-agnostic.</p>
+<script src="/freeunit-kb/assets/kb.js"></script>
+</body></html>

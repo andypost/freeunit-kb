@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>freeunit-exp experimental tracks — harness lanes and workbench state</title>
+<link rel="stylesheet" href="/freeunit-kb/assets/kb.css">
+</head><body>
+<nav class="crumbs"><a href="/freeunit-kb/index.html">index</a> / engineering/freeunit-exp-experimental-tracks</nav>
+
+<h1>freeunit-exp experimental tracks — harness lanes and workbench state</h1>
+<table class="meta"><tr><th>description</th><td>The bot workbench freeunitorg/freeunit-exp: live PRs, branches and issues, the four topics a status question names (TrueAsync, QuickJS, v2, syscall audit) with what is PoC, what shipped upstream and what was removed, and the harness lanes (who runs which model)</td></tr><tr><th>format</th><td>open-knowledge-format-v1</td></tr><tr><th>updated</th><td>2026-10-13</td></tr><tr><th>maintainer</th><td>andypost</td></tr></table>
+<h1>freeunit-exp — workbench state and experimental tracks</h1>
+<p>_Read 2026-10-13 from live <code>gh api</code> (REST) and a local clone of <code>freeunitorg/freeunit-exp</code> (<code>git fetch --prune</code> first). Every number below is MEASURED on that date unless marked otherwise. Method: <code>gh api repos/freeunitorg/freeunit-exp/{branches,issues,pulls}?per_page=100</code>, then <code>git rev-list --count origin/master..origin/&lt;branch&gt;</code> for the ahead/behind figures. Two caveats: <code>/issues</code> includes pull requests, so the two lists overlap (PR numbers are not issue numbers); the ahead/behind counts move with every merge, so re-derive them before quoting._</p>
+<h2>1. What the fork is</h2>
+<p>A fork of <code>freeunitorg/freeunit</code> used as an <strong>unattended-agent workbench</strong>. Rules in <code>HERMES.md</code>: never push upstream; the tracking branch mirrors upstream; branch names carry the task; fork CI is context for a review, never a substitute for upstream CI. Write identity is the GitHub App <code>app/freeunit-agent[bot]</code>, installed on this fork and the research repo only. Merging stays human. Output layer: top-level <code>findings/</code> (agent findings, <code>verified</code> marker), <code>reviews/</code> (PR review notes, added by PR #5), <code>digests/</code>.</p>
+<h2>2. Live state (2026-10-13)</h2>
+<ul><li>Default branch <code>main</code>; <code>main</code> = upstream <code>2dc6596f</code> (synced by PR #38,</li></ul>
+<p>merged 13.10) + 19 fork commits. Upstream has moved on to <code>678ef06d</code>, so <code>main</code> is one sync behind. Fork <code>master</code> = <code>4fef769d</code> (12.10) and is an <strong>ancestor of <code>main</code></strong> — the sync now lands on <code>main</code>, not <code>master</code> (open issue #26 asks for this to fail loudly).</p>
+<ul><li><strong>10 open PRs</strong>, <strong>8 open issues</strong>.</li><li>Bot lane (<code>hermes/*</code>, commits authored as <code>freeunit-agent[bot]</code>): 9 branches.</li><li>Maintainer lanes: <code>ktls-prototype</code>, <code>claude/fix-upstream-sync</code>,</li></ul>
+<p><code>python/base-prefix-home</code>.</p>
+<h3>Open PRs</h3>
+<table><thead><tr><th>PR</th><th>Branch</th><th>Ahead/behind vs fork master</th><th>Subject</th></tr></thead><tbody><tr><td>5</td><td><code>hermes/review-645</code></td><td>3 / 12</td><td>review note: libunit SHM_ACK wait shrink</td></tr><tr><td>21</td><td><code>hermes/stream-map</code></td><td>7 / 12</td><td>docs: stream map with discussion index</td></tr><tr><td>23</td><td><code>hermes/tls-module-proto</code></td><td>10 / 12</td><td>exp(tls): loadable TLS backend module (W1)</td></tr><tr><td>24</td><td><code>hermes/h3-research</code></td><td>5 / 12</td><td>exp(h3): transport spike + verdict note (W3)</td></tr><tr><td>25</td><td><code>hermes/libunit-wakeup-nonblock</code></td><td>2 / 0</td><td>libunit: no block on wake-up in context free (issue 663)</td></tr><tr><td>26</td><td><code>claude/fix-upstream-sync</code></td><td>5 / 12</td><td>ci: upstream sync fails loudly, mirrors master</td></tr><tr><td>28</td><td><code>hermes/tls-table-conn-init</code></td><td>6 / 12</td><td>exp(tls): connection entry through the backend table</td></tr><tr><td>30</td><td><code>hermes/ktls-probe</code></td><td>24 / 12</td><td>exp(ktls): probe the kernel offload path in CI</td></tr><tr><td>31</td><td><code>ktls-prototype</code></td><td>5 / 12</td><td>tls: opt-in kernel TLS for listeners, prototype</td></tr><tr><td>33</td><td><code>hermes/h1p-conn-null-crash</code></td><td>5 / 12</td><td>h1p: 1.37.0 <code>segfault at 0x50</code> fix + test</td></tr></tbody></table>
+<h3>Open issues</h3>
+<table><thead><tr><th>Issue</th><th>Author</th><th>Subject</th><th>State</th></tr></thead><tbody><tr><td>6</td><td>andypost</td><td>verify T1/T2 findings against Unit + Drupal source</td><td>answered by merged PRs #7/#8; wants closing</td></tr><tr><td>11</td><td>bot</td><td>rework list from the 1.37.1 review archive (74 PRs)</td><td>open; section A blocking items</td></tr><tr><td>22</td><td>bot</td><td>isolation + cgroup v2 brief</td><td>open, <strong>HOLD until the 1.37.1 tag</strong></td></tr><tr><td>27</td><td>bot</td><td><code>ci</code>: layout check cannot run on a branch-creating push (all-zero <code>before</code> sha)</td><td>open</td></tr><tr><td>29</td><td>bot</td><td>kTLS step 1: probe the kernel offload path in CI</td><td>open</td></tr><tr><td>32</td><td>andypost</td><td>static: file handler copies through memory buffers, not <code>sendfile</code></td><td>open</td></tr><tr><td>34</td><td>andypost</td><td>kTLS step 2: <code>SSL_sendfile()</code> for file buffers, nginx parity</td><td>open</td></tr><tr><td>36</td><td>bot</td><td>agent task: add a 32-bit musl leg (Alpine i386) to <code>build-test.yml</code></td><td>open</td></tr></tbody></table>
+<p>Closed trail: #1 daily upstream fast-forward, #2/#3/#4/#10 webhook tests, #7/#8 findings (merged), #9 README marks the fork experimental, #35 TLS alert reason 209, #37/#38 upstream syncs (merged 13.10). Findings that landed: <code>findings/T1-php-option-type.md</code> (the PHP option value is string-only, by design) and <code>findings/T2-drupal-drush-install.md</code> (Drupal core install owns SQLite; <code>hash_salt</code> gates the form).</p>
+<p>Watch: cron <code>beda723c07c7</code> (<code>20 <em>/2 </em> <em> </em></code>, no_agent) runs <code>fu-exp-watch.py</code> and delivers new/updated issues and PRs of the fork. <code>freeunit-exp</code> is deliberately <strong>not</strong> in the watermark change tracker (its <code>main</code> replays upstream).</p>
+<h2>3. The four tracks the question asks about</h2>
+<h3>3.1 TrueAsync — REMOVED upstream, not an active track</h3>
+<ul><li><strong>Not in this fork.</strong> No <code>trueasync</code> branch, PR or issue exists here.</li><li><strong>It was removed from the server in 1.37.0</strong>: commit <code>b20aeb78</code> ("php: remove</li></ul>
+<p>the TrueAsync code path", changelog <code>118b28f3</code>), inside tag <code>1.37.0</code>. The <code>CHANGES</code> 1.37.0 entry records why: the code targeted a <code>zend_async_event_t</code> API expected in PHP 8.5 core, which did not ship; the configure probe never succeeded; the code sat behind <code>#if NXT_PHP_TRUEASYNC</code> in every build and could not have compiled (it read <code>async</code>/<code>entrypoint</code> members that <code>nxt_php_app_conf_t</code> has not got and called an undefined <code>nxt_php_extension_init()</code>). The probe, the <code>entrypoint</code> target key and the TrueAsync test suite went with it.</p>
+<ul><li>Earlier history: 1.35.2 shipped a graceful-shutdown fix "for PHP workers in</li></ul>
+<p>TrueAsync mode" — that section is now the project's only TrueAsync trace in the tree besides the removal note.</p>
+<ul><li><strong>KB correction.</strong> An older <code>repos.md</code> line listed <code>freeunitorg/trueasync-experiment</code></li></ul>
+<p>("TrueAsync experiments (v3)"). <code>gh api repos/freeunitorg/trueasync-experiment</code> and a GitHub name search both return <strong>404 / no result</strong> on 2026-10-13, and the org repo list does not contain it. Treat that line as stale. The real external project is the <strong><code>true-async</code></strong> org (<code>true-async/php-async</code>, a PHP core extension implementing the TrueAsync ABI); the FreeUnit repo has no dependency on it and no code path for it.</p>
+<ul><li>Older KB lines that say "TrueAsync not compiled" (artisan-worker-stubs,</li></ul>
+<p>opcache-inprocess-fork, fork-spawn-php, index docs/roadmap note) described the pre-1.37.0 state. Correct reading today: the path is <strong>gone</strong>, so "rebuild the module to get in-process jobs" is no longer a candidate route.</p>
+<h3>3.2 QuickJS — not a FreeUnit experiment; one build flag only</h3>
+<ul><li>Only touchpoint in the whole tree: <code>pkg/contrib/src/njs/Makefile</code> configures</li></ul>
+<p>njs with <code>--no-quickjs</code>. The comment states that njs 1.0.1 recommends QuickJS, but that needs an external QuickJS / QuickJS-NG library, so the build keeps the baseline deterministic. <strong>No FreeUnit QuickJS runtime, module or PoC exists.</strong></p>
+<ul><li>The only other QuickJS trace in our material is packaging, not product:</li></ul>
+<p>Alpine aports <code>main/quickjs-ng</code> (andypost MR !105133, upgrade to 0.15.1).</p>
+<h3>3.3 FreeUnit v2 (PoC)</h3>
+<ul><li><strong>FreeUnit v2 (PoC)</strong> — a separate track, Rust orchestrator + NTS PHP workers</li></ul>
+<p>on Revolt, hypothesis = hang detection by TGID polling + PING/PONG with no FFI and no PHP runtime change. <strong>PoC complete 2026-06-15, development stopped</strong>: 38/38 issues closed, 76 tests green, H1–H6 proven on PHP 8.5.7 NTS. Three related repos: <code>freeunit2</code>, <code>freeunit2-fnb</code> (<code>Request.id</code> multiplex), <code>freeunit2-a4v</code> ("fair three-way" vs RoadRunner and FrankenPHP). Nothing from v2 is in the server tree; the frontend role it aimed at is now held by the TLS/H3 module track on FreeUnit itself.</p>
+<h3>3.4 Syscall audit</h3>
+<ul><li>Research: <code>syscall-audit-kernel-requirements.md</code> (2026-07-16, branch</li></ul>
+<p><code>pre-1.35.6</code>): direct syscalls, glibc wrappers, namespace flags and the Docker seccomp interaction, plus seven recommendations.</p>
+<ul><li><strong>The CI job exists and is advisory</strong>: <code>.github/workflows/security-syscalls.yml</code></li></ul>
+<p>— "Security (Syscall Drift)", <code>continue-on-error: true</code>, matrix <code>glibc</code>/<code>musl</code>, runs pinned containers (<code>debian:trixie-slim</code>/<code>alpine:3.22</code>), captures the syscall set with <code>test/syscalls/run-in-docker.sh</code>, uploads it as an artifact even on failure, then diffs it against the committed baselines <code>test/syscalls/baseline-linux-{glibc,musl}.txt</code>. <code>test/syscalls/README.md</code> holds the four-step sequence (one commit) that makes the gate blocking.</p>
+<ul><li>The Docker/seccomp side has its own gate: <code>security-seccomp.yml</code> (AF_ALG</li></ul>
+<p>profile, hardening matrix, <code>src/nxt_capability.*</code>, <code>nxt_credential</code>, <code>nxt_isolation</code>).</p>
+<ul><li>The KB document's recommendation to make the syscall job blocking is therefore</li></ul>
+<p><strong>partly done</strong> (job shipped, advisory) and partly <strong>open</strong> (no committed baseline from CI yet).</p>
+<ul><li>Recommendation 3 of that document (make <code>capget</code> failure non-fatal) is **done</li></ul>
+<p>and shipped in 1.37.0** (PR #254).</p>
+<h2>4. Harness lanes (who runs which model)</h2>
+<p>The two corrections this note adds:</p>
+<ol><li>The workbench's own lane is recorded only by trailers. In</li></ol>
+<p><code>origin/master..origin/hermes/*</code>: <code>Reviewed-by: FreeUnitOPS (DeepSeek V4.1 Flash, Hermes Agent)</code> ×3 and <code>Co-Authored-By: pi muse-spark-1.3</code> ×1 — so the bot lane is DeepSeek V4.1 Flash under Hermes Agent, with one free-model contribution. Per-PR attribution is usually not recorded (App identity).</p>
+<ol><li>The maintainer's own pipeline is Claude-heavy for authoring/review, with</li></ol>
+<p>DeepSeek V4.1 Flash as the cheap independent pass and the Codex app as the third opinion. The FreeUnit server tree's own trailer counts agree with that split.</p>
+<h2>See also</h2>
+<ul><li><code>engineering/freeunit-satellite-repos-2026-10.md</code> — the four output repos</li><li><code>engineering/freeunit-harness-public-toolkit.md</code> — the published toolkit</li><li><code>engineering/tls-module-prototype.md</code>, <code>engineering/h3-research.md</code> — the W1/W3 notes behind PRs 23/24</li><li><code>engineering/syscall-audit-kernel-requirements.md</code> — the audit and its recommendations</li></ul>
+<script src="/freeunit-kb/assets/kb.js"></script>
+</body></html>

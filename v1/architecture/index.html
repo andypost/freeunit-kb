@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FreeUnit v1 Architecture</title>
+<link rel="stylesheet" href="/freeunit-kb/assets/kb.css">
+</head><body>
+<nav class="crumbs"><a href="/freeunit-kb/index.html">index</a> / v1/architecture</nav>
+
+<h1>FreeUnit v1 Architecture</h1>
+<table class="meta"><tr><th>description</th><td>FreeUnit v1 architecture — multi-process C server on event loop</td></tr><tr><th>tags</th><td>freeunit, v1, architecture, c, processes, event-loop, libunit</td></tr></table>
+<h1>FreeUnit v1 Architecture</h1>
+<h2>Process model</h2>
+<p>FreeUnit (like NGINX Unit) uses a multi-process architecture:</p>
+<pre><code>┌──────────────────────────────────────────────────────┐
+│                 nxt_main_process                      │
+│  (master — root, config, lifecycle)                   │
+└──────────────────────┬───────────────────────────────┘
+                       │
+          ┌────────────┼────────────┐
+          ▼            ▼            ▼
+┌─────────────────┐ ┌─────────┐ ┌─────────────────┐
+│   nxt_controller │ │ router  │ │   app workers   │
+│  (REST API,      │ │ (HTTP   │ │  (PHP/Python/   │
+│   control)       │ │  proxy) │ │   Ruby/... per  │
+└─────────────────┘ └─────────┘ └─────────────────┘</code></pre>
+<h3>Processes (C, event-driven)</h3>
+<table><thead><tr><th>Process</th><th>File</th><th>Role</th></tr></thead><tbody><tr><td><strong>Master</strong></td><td><code>nxt_main_process.c</code></td><td>root-owned, parses config, forks processes</td></tr><tr><td><strong>Controller</strong></td><td><code>nxt_controller.c</code></td><td>REST API (JSON), application management</td></tr><tr><td><strong>Router</strong></td><td><code>nxt_router.c</code> (5974 lines)</td><td>HTTP proxy, load balancing, routing</td></tr><tr><td><strong>App workers</strong></td><td><code>nxt_php_sapi.c</code> etc.</td><td>per-language processes</td></tr></tbody></table>
+<h3>IPC: Port and Shared Memory</h3>
+<ul><li><strong>Port</strong> (<code>nxt_port.c</code>, <code>nxt_port.h</code>): main IPC primitive</li><li><code>nxt_port_socket.c</code> — message passing via Unix sockets</li><li><code>nxt_port_memory.c</code> — shared memory for large payloads</li><li><code>nxt_port_rpc.c</code> — RPC mechanism between processes</li><li><code>nxt_port_queue.h</code> — queue-based messaging (stack overflow protection #88)</li><li><strong>libunit</strong> (<code>nxt_unit.c</code>, 6800 lines): client library for app workers</li><li>Registration, send/receive requests</li><li>Shared memory mmap</li></ul>
+<h3>Event Engine</h3>
+<ul><li><code>nxt_event_engine.c</code> / <code>nxt_event_engine.h</code> — event loop abstraction</li><li><code>nxt_epoll_engine.c</code> — Linux epoll implementation</li><li><code>nxt_kqueue_engine.c</code> — macOS/FreeBSD kqueue</li><li>Support: epoll, kqueue, poll, select</li></ul>
+<h3>HTTP</h3>
+<ul><li><code>nxt_h1proto.c</code> (3110 lines) — HTTP/1.1 protocol (only one)</li><li>HTTP/2 — in roadmap (D2, ~3 months)</li><li>WebSocket: <code>nxt_h1proto_websocket.c</code>, <code>nxt_http_websocket.c</code></li><li>Proxy: <code>nxt_http_proxy.c</code></li><li>Routing: <code>nxt_http_route.c</code>, <code>nxt_http_route_addr.c</code></li><li>Headers: <code>nxt_http_set_headers.c</code> (control char protection #90)</li></ul>
+<h3>Conn (Connection)</h3>
+<ul><li><code>nxt_conn.c</code> / <code>nxt_conn.h</code> — connections</li><li><code>nxt_conn_accept.c</code> — accept new connections</li><li><code>nxt_conn_close.c</code> — close</li><li><code>nxt_conn_write.c</code> — write path (half-close fix PR#54)</li></ul>
+<h3>Security and Isolation</h3>
+<ul><li><code>nxt_isolation.c</code> (1148 lines) — cgroups, capabilities, rootfs</li><li><code>nxt_cgroup.c</code> — cgroup v2 management</li><li><code>nxt_capability.c</code> — Linux capabilities</li><li><code>nxt_fs_mount.c</code> — mount namespaces (openat2 #115)</li><li>TLS: <code>nxt_openssl.c</code> (OCSP stapling — issue #6)</li><li>SCM_CREDENTIALS: <code>nxt_port_socket.c</code> — IPC sender auth (#91)</li></ul>
+<h3>Language Bindings (SAPI)</h3>
+<table><thead><tr><th>Language</th><th>File</th><th>Lines</th></tr></thead><tbody><tr><td>PHP</td><td><code>nxt_php_sapi.c</code></td><td>2653</td></tr><tr><td>Python WSGI</td><td><code>nxt_python_wsgi.c</code></td><td>—</td></tr><tr><td>Python ASGI</td><td><code>nxt_python_asgi_lifespan.c</code>, <code>nxt_python_asgi_websocket.c</code></td><td>—</td></tr><tr><td>Ruby</td><td><code>nxt_ruby.c</code>, <code>nxt_ruby_stream_io.c</code></td><td>63+140</td></tr><tr><td>Perl</td><td><code>nxt_perl_psgi.c</code></td><td>—</td></tr><tr><td>Java</td><td><code>nxt_jni_*.c</code> (14 files)</td><td>—</td></tr><tr><td>Node.js</td><td><code>nxt_napi.h</code></td><td>—</td></tr><tr><td>WASM</td><td><code>nxt_wasm.c</code> (156 lines in pre-1.35.6)</td><td>—</td></tr></tbody></table>
+<h3>Build System</h3>
+<ul><li><code>auto/</code> — autoconf-style configure (NGINX heritage)</li><li><code>auto/cc/</code> — compiler-specific flags</li><li><code>auto/modules/</code> — modules</li><li><code>auto/os/</code> — OS-specific</li></ul>
+<script src="/freeunit-kb/assets/kb.js"></script>
+</body></html>

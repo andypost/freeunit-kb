@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>engineering/zen-quorum-323-case-guard-decision</title>
+<link rel="stylesheet" href="/freeunit-kb/assets/kb.css">
+</head><body>
+<nav class="crumbs"><a href="/freeunit-kb/index.html">index</a> / engineering/zen-quorum-323-case-guard-decision</nav>
+
+<h1>engineering/zen-quorum-323-case-guard-decision</h1>
+
+<h1>zen-quorum — #323 durable-fix decision (case-sensitive <code>*.php</code> guard vs unfiltered <code>share</code>)</h1>
+<p>Date: 2026-09-13 · issue: freeunitorg/freeunit#323 (OPEN) · docs PR: freeunitorg/docs#28</p>
+<h2>Question put to the field</h2>
+<p>Which durable fix for a case-sensitive <code>*.php</code> route guard in front of an unfiltered <code>share</code>? Options: A docs-only sweep · B <code>share</code> refuses code media types unless opted in · C route matching follows the platform/filesystem case behaviour (nginx-style) · D allow-list of servable extensions in <code>share</code>.</p>
+<p>Context block supplied (all verified in code at master <code>ad8f6936</code>): the <code>case_sensitive=1</code> / <code>PATTERN_NOCASE</code> uri rule with no config key against a deliberately <code>LOWCASE</code> host rule; the case-insensitive MIME lookup; <code>share</code> serving anything reachable; removal of the <code>.php</code> entry NOT being a fix (empty type makes <code>!application/x-httpd-php</code> match); a <code>types</code> mismatch never resuming route evaluation; the <code>settings.PHP</code> 200 reproduction; CERT VU#439395 and nginx trac #87 precedence; 14 docs pages carrying the guard with only drupal carrying the false "denies any PHP scripts" claim; fork release policy (patch = security/DoS only, behaviour change = minor).</p>
+<h2>Run</h2>
+<p>Models (pinned from the live profile; <code>laguna</code>, <code>mimo</code>, <code>deepseek-v4-flash</code>, <code>nemotron*</code> were DOWN): <code>ling-3.0-flash-fin-free</code>, <code>muse-spark-1.2-contributor-free</code>, <code>muse-spark-1.3-contributor-free</code>. Window: <strong>2 of 3</strong> returned parseable claims.</p>
+<table><thead><tr><th>model</th><th>raw verdict</th><th>CONCLUSION</th><th>RISK</th><th>note</th></tr></thead><tbody><tr><td>ling-3.0-flash-fin-free</td><td><code>C</code> (prose: "most aligned with the context, especially points 1 and 6")</td><td>PARTIALLY-CLEARED</td><td>medium</td><td>verdict not printed — value longer than the 8-char clamp</td></tr><tr><td>muse-spark-1.2-contributor-free</td><td><code>COMBO</code></td><td>NOT-CLEARED</td><td>high</td><td>dissent: no single token is durable alone</td></tr><tr><td>muse-spark-1.3-contributor-free</td><td>—</td><td>—</td><td>—</td><td>no verdict registered</td></tr></tbody></table>
+<p>muse-spark-1.2 reasoning: "No single token is durable alone because A leaves settings.PHP 200 on APFS/Docker, C alone still leaks if guard absent, and B/D alone leaves the case_sensitive=1/PATTERN_NOCASE mismatch unfixed."</p>
+<p>ling reasoning: matching "must follow filesystem case behavior with opt-in case-sensitive matching, consistent with nginx precedent and the PATTERN_NOCASE root cause".</p>
+<h2>Read</h2>
+<ul><li>Direction agreed: fix the COMPARISON, not the config — C. Plurality, not consensus.</li><li>Divergence is on sufficiency, not direction: one vote (COMBO) says C does not cover the</li></ul>
+<p>class where no guard exists at all, and B/D do not cover the mismatch. Both halves are checkable and both check out (see below).</p>
+<ul><li>The field reads the docs-only option (A) as insufficient alone.</li></ul>
+<h2>Verification of the dissent's factual half (own code pass)</h2>
+<ul><li>"C alone still leaks if the guard is absent": confirmed by the docs sweep — <code>roundcube.rst</code></li></ul>
+<p>has no deny rule at all (its <code>*.php</code> entry is a pass-to-app rule), so on a case-insensitive filesystem an uppercase name reaches the share with nothing in front of it. <code>matomo.rst</code> by contrast DOES have a deny rule, and it works.</p>
+<h2>CORRECTION (same day, code re-read)</h2>
+<p>An earlier version of this note claimed the <code>matomo.rst</code> rule <code>["<em>.php", "</em>/.htaccess", "/config/<em>", "/core/</em>", "/lang/<em>", "/tmp/</em>"]</code> can never match, because a <code>uri</code> array was read as an AND of its elements. <strong>That is wrong, and the error is inverted — treat the arrays as OR with exclusions:</strong></p>
+<ul><li><code>nxt_http_route_pattern_create()</code> sets <code>pattern-&gt;any = 1</code> for every element and zeroes it</li></ul>
+<p>only for a <code>!</code> prefix (src/nxt_http_route.c).</p>
+<ul><li><code>nxt_http_route_test_rule()</code> early-returns when <code>pattern-&gt;any == ret</code>: a POSITIVE element</li></ul>
+<p>short-circuits on SUCCESS, a NEGATIVE one on FAILURE. So positives OR together, and each <code>!</code> element excludes.</p>
+<ul><li><code>nxt_http_pattern_compare()</code> sorts negatives LAST, which only makes sense under that model.</li></ul>
+<p>Consequences: the matomo rule denies any of the six patterns as intended and is exposed to the case vector exactly like drupal's; every <code>["<em>.php", "</em>.php/<em>"]</code> pair in the how-tos is correct; and the new <code>/wp-content/</em>.php</code> step in docs#29 works (four positives OR together). The surviving half of the dissent is the roundcube/no-guard case, which the matomo example does not support.</p>
+<ul><li>muse-spark-1.2's SPOT ("no diff/files touched to verify; single-token constraint is</li></ul>
+<p>incomplete") is a meta-comment about the run shape, not a truncation red flag — expected for a design/text quorum. Its cited context point about the <code>.php</code> table entry is correct.</p>
+<h2>Not decided by the quorum</h2>
+<p>The choice remains the maintainer's. What the quorum adds: a single-token answer is likely wrong — pair C (match-time) with a sink-side half (B or D) if the intent is to cover configs that never had a guard, and keep the docs sweep regardless, because it is the only part that ships today.</p>
+<script src="/freeunit-kb/assets/kb.js"></script>
+</body></html>

@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>engineering/zen-quorum-wasm-stop-the-rest-of-the-request-path</title>
+<link rel="stylesheet" href="/freeunit-kb/assets/kb.css">
+</head><body>
+<nav class="crumbs"><a href="/freeunit-kb/index.html">index</a> / engineering/zen-quorum-wasm-stop-the-rest-of-the-request-path</nav>
+
+<h1>engineering/zen-quorum-wasm-stop-the-rest-of-the-request-path</h1>
+<table class="meta"><tr><th>pr</th><td>freeunitorg/freeunit#320 · branch <code>fix/wasm-worker-abort-followup</code> · head <code>168040a4</code></td></tr><tr><th>body</th><td>(see PR) Two commits on the wasm request path: a negative <code>nxt_unit_request_read()</code></td></tr></table>
+<h1>zen-quorum: PR #320 — wasm: stop the rest of the request path from aborting the worker</h1>
+<p>_gathered 2026-09-12 · keyless OpenCode Free tier · 3 verdicts, 1 model quota-blocked_</p>
+<p><strong>PR:</strong> freeunitorg/freeunit#320 · branch <code>fix/wasm-worker-abort-followup</code> · head <code>168040a4</code> base = master <code>62e10c59</code> (later rebased-free against <code>99086536</code>) · 2 files, +211/−64</p>
+<p><strong>Body:</strong> (see PR) Two commits on the wasm request path: a negative <code>nxt_unit_request_read()</code> wrapped into <code>usize</code> moved <code>set_len()</code> past the allocation; and the remaining libunit response calls / guest trap / dropped sender all aborted the worker under <code>panic = 'abort'</code>.</p>
+<h2>Run 1 (blind — prompt truncated, DISCARD)</h2>
+<p>2× PARTIAL, 1× CORRECT → DIVERGENT. Both PARTIAL votes said "the diff does not show the <code>request_read</code> fix". That was true of the PROMPT, not of the PR: the runner fetched <code>diff[:4000]</code>, printed <code>diff[:3000]</code>, and attached full source only for <code>.c</code>/<code>.h</code> — a Rust PR got no code context. <code>verify_spots()</code> then called the Rust symbols <code>MADE-UP?</code> because its symbol index only recognises C tokens. Artifact, not dissent.</p>
+<h2>Run 2 (after fixing the prompt context: caps 20000/19000, <code>CODE_EXTS</code> +.rs/.py)</h2>
+<table><thead><tr><th>model</th><th>verdict</th><th>SPOT</th></tr></thead><tbody><tr><td>muse-spark-1.3-contributor-free</td><td>PARTIAL</td><td><code>send_response</code> keeps <code>headers().len().try_into().unwrap()</code> and the header-size sum <code>.try_into().unwrap()</code></td></tr><tr><td>muse-spark-1.2-contributor-free</td><td>PARTIAL</td><td>same two unwraps + <code>request_handler</code>'s <code>blocking_send(...).unwrap()</code>; also claimed the diff still truncates (it no longer does)</td></tr><tr><td>ling-3.0-flash-fin-free</td><td>CORRECT</td><td>none</td></tr><tr><td>mimo-v2.5-free</td><td>FAIL 429</td><td><code>FreeUsageLimitError</code> (shared quota) — did not vote</td></tr></tbody></table>
+<p>Window 3/4. Divergence on the enum, agreement on the substance: both PARTIALs name the same residual class, and neither disputes the two named fixes.</p>
+<h2>Ground-truth of the SPOTs (checked against branch code, not the claim)</h2>
+<ul><li><code>try_into().unwrap()</code> in <code>send_response</code>: <strong>unreachable in practice.</strong> <code>headers().len()</code></li></ul>
+<p>(usize→u32) needs &gt;4 billion headers, and the size sum needs &gt;4 GiB of header bytes in one response. Theoretical residue, not a trigger. Distinct from the u8 header-NAME conversion (reachable at 255 bytes), which this PR does fix via <code>bail!</code>.</p>
+<ul><li><code>blocking_send(...).unwrap()</code> / <code>GLOBAL_STATE.get().unwrap()</code> in <code>request_handler</code>:</li></ul>
+<p><strong>real but shutdown-only</strong> (the channel closes when the runtime goes away). Pre-existing, untouched by this PR.</p>
+<ul><li>Both fixes as described are present and correct in the branch code: negative read → error,</li></ul>
+<p>zero read → break, size argument = real remaining space, plus a guard rejecting a count larger than the space given; <code>handle()</code> wrapper + <code>check_rc()</code> + <code>GuestTask</code> (Drop aborts an un-joined handle, <code>join()</code> takes it out first); <code>response_started</code> set only after <code>response_send</code> — verified against libunit, where a second <code>response_init</code> before the status line is a documented duplicate-init path, not an abort.</p>
+<ul><li>muse-1.2's "obs_text expects 200 while the body claims 400" is a misreading: the 400s are the</li></ul>
+<p>two requests in <code>test_wasm_component_unrepresentable_request</code> (obs-text in <code>Host</code>, <code>&lt;</code> in the target); <code>test_wasm_component_obs_text</code> expects 200 for obs-text in the target/header value. Body wording ("two regression tests") is loose for "two cases of one test".</p>
+<h2>Verdict</h2>
+<p>APPROVE, non-blocking notes only. Not client-drivable; the guest-reachable abort (&gt;255-byte response header name) is fixed. Two follow-ups worth a line each if the file is to have zero request-path <code>unwrap()</code>s, plus the doc-comment drift (<code>GuestTask</code> still asserts the client-disconnect trigger that #318's own correction retracts). #318/#319 do not auto-close ("closing #NNN" is not a GitHub keyword).</p>
+<script src="/freeunit-kb/assets/kb.js"></script>
+</body></html>

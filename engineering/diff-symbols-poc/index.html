@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>engineering/diff-symbols-poc</title>
+<link rel="stylesheet" href="/freeunit-kb/assets/kb.css">
+</head><body>
+<nav class="crumbs"><a href="/freeunit-kb/index.html">index</a> / engineering/diff-symbols-poc</nav>
+
+<h1>engineering/diff-symbols-poc</h1>
+
+<h1>diff-symbols POC — understand code logic through PRs (2026-09-04)</h1>
+<p>_What a code-reading agent needs to read code faster and EXACTLY: not a full AST index of every file (changes rarely, expensive), but a <strong>diff-symbols</strong> table — which symbols each PR touched and WHY. This is language-agnostic (diffs are text) and gives evolution, not snapshot — the thing a reviewer actually wants._</p>
+<h2>Why this beats a full AST index</h2>
+<table><thead><tr><th>Approach</th><th>Cost</th><th>What it tells you</th></tr></thead><tbody><tr><td>Full AST index of all files</td><td>index 141 files (rare changes), heavy</td><td>snapshot: "what exists"</td></tr><tr><td><strong>diff-symbols (PR-based)</strong></td><td>incremental via watermark, cheap</td><td><strong>"which PR touched X and WHY"</strong> — the logic</td></tr></tbody></table>
+<p>The insight: to understand a codebase you ask <strong>how it evolved</strong>, not what it contains. Renames/moves/removals/reasons live in PR diffs + body/comment/issue context — exactly what a static snapshot hides.</p>
+<h2>Storage schema (from POC B — subagent, validated)</h2>
+<pre><code class="language-sql">CREATE TABLE IF NOT EXISTS diff_symbols(
+    symbol     TEXT NOT NULL,          -- fn/var/class name
+    file       TEXT NOT NULL,          -- path in repo
+    pr_id      INTEGER NOT NULL,       -- PR number (or commit id)
+    pr_title   TEXT,
+    delta_type TEXT,                   -- added / modified / deleted / renamed
+    lang       TEXT,                   -- c / php / ...
+    meta_json  TEXT,                   -- {&quot;body&quot;:..., &quot;commit_msg&quot;:..., &quot;comment&quot;:...}
+    changed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (symbol, file, pr_id)
+);
+CREATE INDEX idx_ds_symbol  ON diff_symbols(symbol);
+CREATE INDEX idx_ds_file    ON diff_symbols(file);
+CREATE INDEX idx_ds_pr      ON diff_symbols(pr_id);
+CREATE INDEX idx_ds_delta   ON diff_symbols(delta_type);
+CREATE INDEX idx_ds_prefix  ON diff_symbols(symbol, file);   -- subsystem nav</code></pre>
+<p><strong>Incremental fill (watermark, no full re-read):</strong></p>
+<pre><code class="language-sql">last = SELECT max(pr_id) FROM diff_symbols;
+new  = SELECT * FROM gh_cache WHERE pr_id &gt; :last AND repo = :repo;
+-- for each PR: parse diff with tree-sitter, classify delta, INSERT OR REPLACE</code></pre>
+<p><strong>Example queries:</strong></p>
+<ul><li>"which PRs changed a function X and why" —</li></ul>
+<p><code>SELECT pr_id, pr_title, delta_type, json_extract(meta_json,'$.body') FROM diff_symbols WHERE symbol='X' ORDER BY pr_id DESC</code></p>
+<ul><li>"who else touched this subsystem" — <code>WHERE file LIKE 'src/db/%' OR symbol LIKE 'DB_%'</code></li><li>"rename tracking" — self-join on <code>delta_type='renamed'</code> across <code>symbol</code>/<code>file</code>/<code>pr_id</code></li></ul>
+<h2>Real POC on unit (commit 73cc8cc8, src/nxt_application.c)</h2>
+<pre><code class="language-diff">+ static void nxt_app_new_port_handler(nxt_task_t *task, nxt_port_recv_msg_t *msg);
+-      .new_port = nxt_port_new_port_handler,
++      .new_port = nxt_app_new_port_handler,
++ static void nxt_app_new_port_handler(nxt_task_t *task, nxt_port_recv_msg_t *msg) {
++     nxt_port_new_port_handler(task, msg);
++     nxt_port_recv_msg_close_fds(msg);   // &lt;-- reason
++ }</code></pre>
+<table><thead><tr><th>symbol</th><th>delta_type</th><th>why</th></tr></thead><tbody><tr><td>nxt_app_new_port_handler</td><td><strong>added</strong></td><td>close queue fds the base handler leaks (discovery/proto didn't know if they map queues)</td></tr><tr><td>.new_port</td><td><strong>modified</strong></td><td>point handler to new wrapper (×2)</td></tr><tr><td>nxt_port_new_port_handler</td><td>referenced</td><td>stays; called by wrapper</td></tr></tbody></table>
+<p><strong>Lesson:</strong> the diff comment IS the reason ("only the caller knows whether this process maps port queues"). That context is in the PR/diff, NOT in a snapshot.</p>
+<h2>cache-bounding (POC C — measured 2026-09-04)</h2>
+<ul><li>gh_cache.json <strong>224 KB</strong> now (10 entities: 5 PR + 5 GL-MR).</li><li>Full diff of one unit commit (all files) = <strong>29.9 KB</strong>; median PR diff ~<strong>18 KB</strong>.</li><li>Adding a FULL diff for 200 PRs → <strong>+3.5 MB</strong> (16x growth) — too much.</li><li><strong>Recommendation:</strong> store metadata (title/body/comments/reviews/additions/</li></ul>
+<p>deletions) always; store diff <strong>COMPRESSED</strong> — only <code>changed_files</code> + <code>+/- lines</code> (1–3 KB/PR), NOT the full patch; keep the full patch as a <code>diff_url</code> link + symbol signatures. Put the diff-symbols table in SQLite separately so the meta JSON cache doesn't bloat.</p>
+<h2>Toolchain facts (verified)</h2>
+<ul><li>tree-sitter-c (uv, wheel, no rust/gcc): parses unit 141 files / 0.9s / 1935 funcs</li></ul>
+<p>— error-tolerant (pycparser 0/141 — fails on macros, needs preprocessor).</p>
+<ul><li>Subagent <code>zen_tool_agent</code> gained: retry-on-503 (free-tier availability),</li></ul>
+<p><code>run_git</code> (read-only git, sanitized vs pipe/<code>;</code>/redirect — model adds those, would break the non-shell subprocess).</p>
+<ul><li>free-tier (2026-09-04): laguna+ling alive/fast, nemotron-3.5 slowed 2x,</li></ul>
+<p>nemotron-3-ultra timeout, deepseek/muse down. Working quorum pair = laguna+ling.</p>
+<h2>Related</h2>
+<ul><li><code>engineering/evolver-reference.md</code> — the proven parent pattern (symbols+SQLite).</li><li><code>engineering/unit-code-graph.md</code> (next) — tree-sitter symbol index for unit.</li></ul>
+<script src="/freeunit-kb/assets/kb.js"></script>
+</body></html>

@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>engineering/zen-review-pr-279</title>
+<link rel="stylesheet" href="/freeunit-kb/assets/kb.css">
+</head><body>
+<nav class="crumbs"><a href="/freeunit-kb/index.html">index</a> / engineering/zen-review-pr-279</nav>
+
+<h1>engineering/zen-review-pr-279</h1>
+
+<h1>zen-review PR #279 — isolation: reject "rootfs" + credential ns without a mount ns</h1>
+<p>_2026-09-08. Review of freeunitorg/freeunit#279. Forced update <code>1e43adac → 71b64952</code> _+368/−1, 3 files. APPROVE. Config-time refusal of a kernel invariant._</p>
+<h2>The bug</h2>
+<p><code>rootfs</code> + <code>namespaces.credential: true</code> without <code>namespaces.mount: true</code> was accepted, but the prototype died at every start; control API said only <code>Failed to apply new configuration.</code> (or nothing, when started lazily).</p>
+<h2>Root cause (kernel invariant — not fixable at runtime)</h2>
+<p>The child unshares <code>CLONE_NEWUSER</code> without <code>CLONE_NEWNS</code> (<code>nxt_isolation.c:438-466</code>, <code>unshare</code> in <code>nxt_process.c:526</code>), so it holds capabilities in a new user namespace while staying in the parent's mount namespace, owned by the <em>initial</em> user namespace. <code>mount(2)</code> requires <code>CAP_SYS_ADMIN</code> in the user namespace owning the mount ns → each automount in <code>nxt_isolation_prepare_rootfs()</code> (<code>:926</code>) gets <code>EPERM</code> (<code>nxt_fs_mount.c:93</code>). Nothing Unit can do at runtime; the only useful fix is to name the cause at config time.</p>
+<h2>The rule (deliberately narrow)</h2>
+<ul><li>The rootfs switch itself needs no mount ns — <code>nxt_isolation_change_root()</code></li></ul>
+<p>(<code>:1058</code>) falls back to <code>chroot(2)</code> (needs only <code>CAP_SYS_CHROOT</code> in the new user ns). So a config that mounts nothing starts and serves.</p>
+<ul><li>The check fires only when a mount would be attempted: <code>tmpfs</code>/<code>procfs</code></li></ul>
+<p>(unconditional builtins, <code>deps=0</code>) or <code>language_deps</code> when the module declares mounts (<code>lang-&gt;mounts != NULL &amp;&amp; nelts &gt; 0</code>).</p>
+<ul><li>Defaults agree: both validator and runtime default <code>language_deps/tmpfs/procfs=1</code></li></ul>
+<p>(<code>nxt_isolation.c:602-604</code>); validator passes <code>dflt=1</code> — identical.</p>
+<ul><li>Generic: hook in <code>nxt_conf_vldt_app</code>, works for all langs via <code>lang-&gt;mounts</code>.</li></ul>
+<h2>Verdict: APPROVE (reinforced after forced update)</h2>
+<ul><li>✅ Core config-time refusal correct; not over-strict (chroot path and</li></ul>
+<p>no-automount stay valid).</p>
+<ul><li>✅ Error now NAMES the specific automount to switch off</li></ul>
+<p>(<code>"or set \"automount\": {&lt;name&gt;: false}"</code>) — UX improvement.</p>
+<ul><li>✅ <code>declared-but-absent</code> line: the validator asks what the module DECLARES, not</li></ul>
+<p>what runtime would mount (it also skips a bind whose <code>stat(src)</code> fails, <code>:930</code>). The author chose not to <code>stat()</code> host paths from the validator because it runs as the unitd user in the controller while the prototype mounts as root — same euid-signal problem in the other direction. <code>declared-but-absent</code> needs no FS access, doesn't change under the app's feet, and names the knob. Sound rejection of a Codex P2.</p>
+<ul><li>✅ New <code>test_python_isolation_rootfs_credential_language_deps</code>: at</li></ul>
+<p><code>procfs:false,tmpfs:false</code> the error names ONLY <code>"language_deps": false</code> (not the off procfs/tmpfs); the same config with <code>language_deps:false</code> is accepted. Both sides deterministic.</p>
+<h2>Notes</h2>
+<ul><li>Refs the kernel <code>mount(2)</code>/user-ns invariant. P2 (Codex) rejected on</li></ul>
+<p>euid-distinct grounds — correct.</p>
+<ul><li>Sibling: zen-review-pr-265 (PHP automount mounts), pr-283/295 (no-body).</li></ul>
+<script src="/freeunit-kb/assets/kb.js"></script>
+</body></html>

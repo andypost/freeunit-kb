@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>engineering/acme-certbot-thin-layer</title>
+<link rel="stylesheet" href="/freeunit-kb/assets/kb.css">
+</head><body>
+<nav class="crumbs"><a href="/freeunit-kb/index.html">index</a> / engineering/acme-certbot-thin-layer</nav>
+
+<h1>engineering/acme-certbot-thin-layer</h1>
+<table class="meta"><tr><th>date</th><td>2026-09-11 · <strong>Status:</strong> built + tested live on running unitd 1.36.1</td></tr><tr><th>artifacts</th><td><code>tools/artisan_stubs/certbot-unit-hook.sh</code> (+ generic <code>acme_stub.py</code>)</td></tr><tr><th>verdict</th><td>✅ correct call — certbot as-is + a ~40-line Unit hook beats a</td></tr></table>
+<h1>ACME via certbot thin layer for Unit — the "прослойка"</h1>
+<p><strong>Date:</strong> 2026-09-11 · <strong>Status:</strong> built + tested live on running unitd 1.36.1 <strong>Artifacts:</strong> <code>tools/artisan_stubs/certbot-unit-hook.sh</code> (+ generic <code>acme_stub.py</code>) <strong>Verdict:</strong> ✅ correct call — certbot as-is + a ~40-line Unit hook beats a hand-rolled ACME client.</p>
+<h2>Why a thin layer, not our own ACME</h2>
+<p>certbot already owns <strong>all</strong> the hard ACME parts: account/registration, JWS signing, nonces, challenge orchestration, ordering, renewal bookkeeping, staging vs prod, rate-limit handling. Reimplementing that is months of churn for nothing.</p>
+<p>Unit only needs <strong>two</strong> pieces of glue, both trivial and Unit-specific:</p>
+<ol><li><strong>HTTP-01 challenge serving</strong> — certbot's <code>--webroot</code> writes a token to</li></ol>
+<p><code>&lt;webroot&gt;/.well-known/acme-challenge/&lt;tok&gt;</code>; Unit serves it with <strong>one route</strong>.</p>
+<ol><li><strong>Deploy</strong> — certbot's <code>--deploy-hook</code> calls our script with the renewed</li></ol>
+<p>lineage; we <code>PUT</code> the bundle to the <strong>Control API</strong>.</p>
+<p>That is the whole "прослойка". No ACME in C, no TLS-ALPN-01 work needed for the common case.</p>
+<h2>What was tested live</h2>
+<table><thead><tr><th>Half</th><th>Test</th><th>Result</th></tr></thead><tbody><tr><td><strong>Deploy hook</strong></td><td>fake lineage → <code>certbot-unit-hook.sh</code> → live unitd</td><td><code>hook: deployed hookcert ... to Unit</code>; <code>GET /certificates/hookcert</code> → <strong>CN: hook.example.com</strong> ✅</td></tr><tr><td><strong>HTTP-01</strong></td><td>token in webroot → fetch over HTTP like the ACME server</td><td>route <code>/.well-known/acme-challenge/*</code> → <code>share: &lt;webroot&gt;$uri</code> → <strong><code>TOKEN-CONTENT</code></strong> ✅</td></tr></tbody></table>
+<p>certbot itself: <code>5.8.0</code> (Alpine edge, or <code>uv pip install certbot</code>); hook flags <code>--deploy-hook</code> / <code>--pre-hook</code> / <code>--post-hook</code> / <code>--webroot</code> all present.</p>
+<h2>The hook (essence)</h2>
+<pre><code class="language-sh"># certbot renew --deploy-hook /usr/local/bin/certbot-unit-hook.sh
+LINEAGE=&quot;$RENEWED_LINEAGE&quot;                 # /etc/letsencrypt/live/&lt;domain&gt;
+cat &quot;$LINEAGE/privkey.pem&quot; &quot;$LINEAGE/fullchain.pem&quot; &gt; &quot;$TMP&quot;
+curl -sS -X PUT --data-binary @&quot;$TMP&quot; --unix-socket \
+     &quot;${UNIT_CONTROL_SOCK:-/var/run/control.unit.sock}&quot; \
+     &quot;http://localhost/certificates/${UNIT_CERT_NAME:-$(basename &quot;$LINEAGE&quot;)}&quot;</code></pre>
+<p>Key Unit-side facts:</p>
+<ul><li>The certificate object wants <strong>privkey + full chain in ONE PEM</strong> (concatenate).</li><li>A <code>PUT</code> to an <strong>existing</strong> name replaces the cert and triggers the reload —</li></ul>
+<p><strong>no restart, no delete-then-add "dance"</strong> (this is the upstream #195 pain; our X9 Step 1 makes it unnecessary).</p>
+<ul><li><code>$uri</code> in a Unit route is the <strong>full</strong> request path → the webroot share must be</li></ul>
+<p><code>"&lt;webroot&gt;$uri"</code>, not <code>"&lt;webroot&gt;/.well-known/acme-challenge$uri"</code> (the latter double-prefixes → 404).</p>
+<h2>Wiring (turnkey)</h2>
+<pre><code class="language-sh">certbot certonly --webroot -w /var/www/acme -d example.com \
+        --deploy-hook /usr/local/bin/certbot-unit-hook.sh
+# renew timer (cron/systemd) -&gt; certbot renew (hook fires only on real renewal)</code></pre>
+<p>Unit config (the challenge route + the TLS listener that uses the cert):</p>
+<pre><code class="language-json">&quot;listeners&quot;: { &quot;*:443&quot;: { &quot;tls&quot;: { &quot;certificate&quot;: &quot;hookcert&quot; }, &quot;pass&quot;: &quot;routes&quot; } },
+&quot;routes&quot;: [ { &quot;match&quot;: { &quot;uri&quot;: &quot;/.well-known/acme-challenge/*&quot; },
+              &quot;action&quot;: { &quot;share&quot;: &quot;/var/www/acme$uri&quot; } } ]</code></pre>
+<h2>Two integration shapes (both valid)</h2>
+<ol><li><strong>External certbot + OS timer</strong> (this doc) — simplest; certbot renews via</li></ol>
+<p>cron/systemd, hook deploys. No Unit app at all.</p>
+<ol><li><strong>certbot driven from the Unit app</strong> (<code>acme_stub.py</code>, X10 pattern) — the app's</li></ol>
+<p><code>lifespan.startup</code> loop runs <code>ACME_CMD</code>/certbot and deploys; makes Unit self-driving (no host cron). Use when you want zero external schedulers.</p>
+<p>Both share the <strong>same hook logic</strong> and the <strong>same config route</strong>. Start with (1); move to (2) if you want the daemon self-updating.</p>
+<h2>Caveats</h2>
+<ul><li><strong>HTTP-01 only</strong> here (works today, no X11). <strong>TLS-ALPN-01</strong> still needs the</li></ul>
+<p>modular-TLS work (select cert per ALPN in-handshake) — see <code>acme-reuse.md</code> Step B.</p>
+<ul><li>certbot's own <code>--deploy-hook</code> does <strong>not</strong> fire on <code>--dry-run</code> unless</li></ul>
+<p><code>--run-deploy-hooks</code> is passed (good for prod safety).</p>
+<ul><li>Rename/repoint a cert in Unit by re-<code>PUT</code>ting the name; retire the old one only</li></ul>
+<p>after the new is live (atomic swap).</p>
+<ul><li>Account key + lineage are <strong>secrets</strong> — live under <code>/etc/letsencrypt</code>, never in</li></ul>
+<p>Unit config.</p>
+<script src="/freeunit-kb/assets/kb.js"></script>
+</body></html>

@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>engineering/zen-review-pr-288</title>
+<link rel="stylesheet" href="/freeunit-kb/assets/kb.css">
+</head><body>
+<nav class="crumbs"><a href="/freeunit-kb/index.html">index</a> / engineering/zen-review-pr-288</nav>
+
+<h1>engineering/zen-review-pr-288</h1>
+
+<h1>zen-review PR #288 — router: fail the start RPC when the prototype dies</h1>
+<p>_2026-09-08. Review of freeunitorg/freeunit#288 (OPEN, <code>fix/router-proto-death-fails-start</code>). _+524/−0, 7 files. Fixes #269._</p>
+<h2>The wedge</h2>
+<p><code>nxt_router_start_app_process_handler()</code> (<code>src/nxt_router.c:401</code>) armed an RPC on the router's own port and sent <code>START_PROCESS</code> to the prototype (<code>:469</code>), but armed the registration with <strong>no peer</strong>. The only thing that could retire it was a reply on its own stream (worker's <code>PROCESS_READY</code> forwarded as <code>NEW_PORT</code>).</p>
+<p>When a prototype dies <strong>after forking the worker and before that worker's READY</strong>, no reply is possible and nothing retires the registration:</p>
+<ul><li><code>REMOVE_PID</code> carries no stream for a prototype that had itself reached READY</li></ul>
+<p>(<code>nxt_main_process.c:1200</code>) → the <code>RPC_ERROR</code> branch does not fire;</p>
+<ul><li><code>nxt_port_rpc_remove_peer()</code> (<code>nxt_port.c:1067</code>) retires by peer → <code>no reg found</code></li></ul>
+<p>(peer was never set);</p>
+<ul><li><code>nxt_port_rpc_close()</code> runs on the prototype's port, a different table;</li><li>the orphaned worker is reparented to init and exits on a broken-pipe READY.</li></ul>
+<p>So <code>app-&gt;pending_processes</code> keeps the attempt's slot. With <code>{"spare": 0}</code> that one slot is the whole of <code>max_pending_processes</code> (<code>:2061</code>), so <code>nxt_router_app_can_start()</code> (<code>:1226</code>) is false for the router's lifetime. Every later request joins <code>ack_waiting_req</code>; no replacement prototype is ever asked for, because only the start handler asks and <code>can_start</code> gates it.</p>
+<h2>The fix</h2>
+<p><code>nxt_port_rpc_ex_set_peer(task, port, app_joint_rpc, dport-&gt;pid)</code> — key the registration by the prototype's pid so its death retires the RPC. Then <code>nxt_port_rpc_remove_peer()</code> fires <code>nxt_router_app_port_error()</code> exactly once (clears <code>-&gt;peer</code>, deletes the stream, frees the registration), which decrements <code>pending_processes</code> (<code>:5073</code>) and fails <code>ack_waiting_req</code> when no process remains. For a prototype start the peer is the main process — harmless (its death is fatal anyway).</p>
+<h2>Verdict: APPROVE</h2>
+<ul><li>✅ <code>_ex_set_peer</code> is idempotent-safe (<code>if (reg-&gt;peer == peer) return</code>), and on a</li></ul>
+<p>change it first removes the old peer link.</p>
+<ul><li>✅ <code>nxt_router_app_port_error</code> does exactly the slot release: <code>pending_processes--</code></li></ul>
+<p>and fails <code>ack_waiting_req</code> when <code>processes == 0</code>.</p>
+<ul><li>✅ Peer for a prototype start = main process, documented as harmless.</li><li>✅ Single fire, not double: <code>remove_peer</code> clears the registration (peer → −1).</li></ul>
+<h2>Test (strong)</h2>
+<p><code>nxt_router_proto_death_test.c</code> (309 lines), sibling of <code>nxt_router_proto_wedge_test.c</code> (which covers the prototype-start branch via <code>nxt_port_rpc_close()</code>). Mirrors the private <code>nxt_router_app_can_start()</code> (it is <code>nxt_inline</code> and unreachable externally) with a "must be kept in sync" note. Built like <code>nxt_router_new_port_test.c</code>. Added to <code>auto/sources</code>.</p>
+<h2>Non-blocking note</h2>
+<p>The local copy <code>nxt_router_proto_death_can_start()</code> duplicates the library predicate and drifts if <code>nxt_router_app_can_start()</code> evolves — same class of drift the keeper caught on ling. Mark it clearly for sync on every change to <code>can_start</code>.</p>
+<h2>Notes</h2>
+<ul><li>Refs #269. Sibling: zen-review-pr-281 (engine-quit tmcf UAF), pr-282 (compression</li></ul>
+<p>shm leak).</p>
+<script src="/freeunit-kb/assets/kb.js"></script>
+</body></html>

@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>engineering/zen-review-pr-295</title>
+<link rel="stylesheet" href="/freeunit-kb/assets/kb.css">
+</head><body>
+<nav class="crumbs"><a href="/freeunit-kb/index.html">index</a> / engineering/zen-review-pr-295</nav>
+
+<h1>engineering/zen-review-pr-295</h1>
+
+<h1>zen-review PR #295 — proxy: complete a bodyless upstream response on its headers</h1>
+<p>_2026-09-08. Review of freeunitorg/freeunit#295 (OPEN, <code>fix/proxy-bodyless-upstream</code>). _+349/−19, 5 files. Follow-up to #283 — its upstream half (base = 4aaede27, #283)._</p>
+<h2>The bug (pipelined request lost; HEAD is the ordinary case)</h2>
+<p><code>nxt_h1p_peer_header_read_done()</code> (<code>src/nxt_h1proto.c:2854</code>) armed the upstream body framing from the upstream headers alone: <code>Content-Length</code> became <code>h1p-&gt;remainder</code>, <code>Transfer-Encoding</code> armed <code>h1p-&gt;chunked_parse</code>. Neither the request method nor the response status was consulted.</p>
+<p>RFC 9112 §6.3 rule 1: a response to HEAD, and any 204/304, ends at the first empty line after the header fields whatever <code>Content-Length</code>/<code>Transfer-Encoding</code> say. The upstream sends the header block and — because <code>nxt_h1p_peer_header_send()</code> (<code>:2541</code>) always writes <code>Connection: close</code> to every upstream — then closes. <code>nxt_h1p_peer_closed()</code> (<code>:3172</code>) reads that as a cut body (<code>h1p-&gt;remainder</code> still the advertised length, or <code>chunked_parse.last</code> clear), so it sets <code>r-&gt;truncated</code> + <code>r-&gt;inconsistent</code>; <code>nxt_h1p_request_close()</code> (<code>:1929</code>) then drops the client keep-alive (<code>h1p-&gt;keepalive &amp;= !r-&gt;inconsistent</code>) over a response that was never short. Any pipelined request is lost. Note: the first response carries no <code>Connection: close</code> on the wire, because keepalive is cleared in <code>request_close()</code> AFTER the header is sent — the client gets no signal.</p>
+<h2>The fix</h2>
+<p>Decide framing where it is armed. In <code>nxt_h1p_peer_header_read_done()</code>: if <code>nxt_http_request_is_bodyless_final(r, peer-&gt;status)</code> → <code>chunked = 0</code>, <code>remainder = 0</code>, <code>peer-&gt;body = nxt_http_buf_last(r)</code>, <code>peer-&gt;closed = 1</code>, then <code>r-&gt;state-&gt;ready_handler()</code>. Completion is identical to a body reaching its declared length (in <code>peer_body_process</code>).</p>
+<h2>Refactor in <code>nxt_http_request.c</code> (the part to scrutinise)</h2>
+<ul><li><code>is_bodyless</code> now takes <code>status</code> as a parameter (was reading <code>r-&gt;status</code>),</li></ul>
+<p>because the proxy has to answer before <code>r-&gt;status</code> exists (it lives in <code>peer-&gt;status</code>; <code>nxt_http_proxy_header_read()</code> copies it into <code>r-&gt;status</code> one step later).</p>
+<ul><li>Split <strong><code>is_bodyless_final</code></strong> (204/304/HEAD, NO 1xx) from <code>is_bodyless</code> (includes</li></ul>
+<p>1xx). Correct: a 1xx is an interim response, "carries no body" ≠ "ends the exchange", and a caller needing the second must not get the first's answer.</p>
+<ul><li><code>websocket_handshake &amp;&amp; status == 101</code> moved into <code>is_bodyless</code> (not <code>_final</code>).</li></ul>
+<h2>Verdict: APPROVE</h2>
+<ul><li>✅ Completion path closed: <code>peer-&gt;closed = 1</code> → <code>nxt_http_proxy_send_body</code> sees</li></ul>
+<p>closed → <code>peer_close()</code> + <code>nxt_mp_release(r-&gt;mem_pool)</code>. Same as a full body — no pool leak, upstream closed.</p>
+<ul><li>✅ <code>is_bodyless_final</code> precise; 1xx excluded on purpose, with honest comment</li></ul>
+<p>(pre-existing 1xx out of scope).</p>
+<ul><li>✅ <code>b</code> deliberately not freed/forwarded: <code>peer-&gt;fields</code> point inside it</li></ul>
+<p>(<code>nxt_http_parse_fields</code>); <code>header_read</code> copies field structs into <code>r-&gt;resp</code> where <code>$response_header_*</code> / <code>match</code> read them until request close. Returning the buffer to the engine cache would leave those pointing at reusable memory.</p>
+<ul><li>✅ Clean base — direct child of #283, no conflict replay.</li></ul>
+<h2>Test (strong)</h2>
+<p><code>test_proxy_head.py</code> (250 lines): every case pipelines TWO requests in one write (bodyless + GET /ok); the second response arriving is the regression assertion. Covers HEAD+CL, HEAD+chunked, GET 204 (CL dropped), GET 304 (CL kept), <code>$response_header_*</code> readability after completion. <code>check_pipeline</code> pins exact wire shape (no <code>transfer-encoding</code>, no <code>close</code>, second response 200 with body OK). Port 7978 reserved in the fake_upstream registry.</p>
+<h2>Notes</h2>
+<ul><li>Refs #283 (downstream half of the same rule, already merged). Sibling reviews:</li></ul>
+<p>pr-282 (compression shm), pr-288 (proto-death RPC), pr-283 (downstream no-body).</p>
+<script src="/freeunit-kb/assets/kb.js"></script>
+</body></html>

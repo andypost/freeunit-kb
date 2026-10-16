@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>engineering/php-phar-history-vulns</title>
+<link rel="stylesheet" href="/freeunit-kb/assets/kb.css">
+</head><body>
+<nav class="crumbs"><a href="/freeunit-kb/index.html">index</a> / engineering/php-phar-history-vulns</nav>
+
+<h1>engineering/php-phar-history-vulns</h1>
+
+<h1>phar: история и классы уязвимостей (php-src, 2021-09 → 2026-08)</h1>
+<p>_Исследование 2026-09-09. 200+ коммитов в ext/phar за 5 лет. Категоризация по ценности._</p>
+<h2>Масштаб и характер</h2>
+<p>Не столько новые функции, сколько <strong>циклы рефакторинга + накопившиеся security-фиксы</strong>. Два плотных всплеска: гига-<code>zend_string*</code> рефакторинг (апрель-май 2026) и цепочка symlink/UAF/leak фиксов (май-август 2026). Число коммитов завышено merge-каскадами PHP-8.2/8.3/8.4/8.5 (одни правки применяются 5×).</p>
+<h2>1. Security-класс (главное для мейнтейнера)</h2>
+<table><thead><tr><th>Дата</th><th>Проблема</th></tr></thead><tbody><tr><td>2026-08</td><td>UAF mounted phar subdir (GH-23418, #23442)</td></tr><tr><td>2026-08</td><td>memleak duplicate native manifest entries (GH-23477)</td></tr><tr><td>2026-07</td><td>GHSA-vc5h-9ppw-p5f3: circular symlink crash</td></tr><tr><td>2026-05</td><td>harden OpenSSL signature handling (#22174)</td></tr><tr><td>2026-05</td><td>PharData::getContent() crash on infinite recursion + symlink (GH-21986)</td></tr><tr><td>2025-10</td><td>fd-leak phar_zip_flush(); memleak gzip/openssl-polyfill; double-free Windows</td></tr><tr><td>2025-11</td><td>assertion-failure crashes (fseek OOB, stream-filter params); fflush() return fix</td></tr></tbody></table>
+<p>Паттерн: <strong>phar-обработка путей/симлинков не рассчитана на враждебные архивы</strong>. tar с произвольными symlink-entry, циклами, <code>..</code>/mount — атакующая поверхность.</p>
+<h2>2. Корневые механизмы (разбор трёх 2026-уязвимостей)</h2>
+<h3>2.1 GHSA-vc5h + GH-21986 — ОДНА функция <code>phar_get_link_source()</code>, два поколения патчей</h3>
+<p>Наивная рекурсия <code>return phar_get_link_source(link_entry);</code>. tar позволяет <code>a-&gt;b</code>, <code>b-&gt;a</code> → рекурсия никогда не завершается → stack overflow → SIGSEGV.</p>
+<table><thead><tr><th>Патч</th><th>Механизм</th><th>Замечание</th></tr></thead><tbody><tr><td>GH-21986 (May, b2de3cf1)</td><td>depth-limit (<code>depth &gt; max_depth = nEntries</code>)</td><td>требует hash-count на вызов</td></tr><tr><td>GHSA-vc5h (Jul, 2e0fa0a4)</td><td><strong>Floyd cycle detection</strong> (slow/fast)</td><td>const-mem, точное обнаружение цикла</td></tr></tbody></table>
+<p>July-патч надёжнее (точный detect, нет hash-count); фактически перезаписал May-патч. Classic: сначала quick-fix recursion, потом более идиоматичный алгоритм поверх.</p>
+<h3>2.2 GH-23418 — UAF на <code>path</code></h3>
+<p><code>phar_get_entry_info_dir()</code>: нашёл <code>test</code> (путь из ключа манифеста), зовёт <code>phar_mount_entry(phar, test, test_len, path, path_len)</code> — монтирует файл-как-директорию на лету. Затем использует <code>path</code> для <code>zend_hash_str_find_ptr(&amp;phar-&gt;manifest, path, path_len)</code>. <strong><code>path</code> могла быть освобождена внутри <code>phar_mount_entry()</code></strong> (та переписывает/укорачивает путь) → UAF.</p>
+<p>Фикс: <code>mount_path = estrndup(path, path_len)</code> до вызова (null-terminated, переживает <code>phar_mount_entry</code>); <code>test</code> держится до конца error-format/manifest-lookup.</p>
+<p><strong>Класс:</strong> временный буфер-параметр, переданный в функцию, которая (неизвестно вызывающему) может его освободить. <code>char*</code> без явного len/иматируемости.</p>
+<h2>3. Связь с <code>zend_string*</code>-рефакторингом (апрель-май 2026)</h2>
+<p>Гига-миграция internals phar с raw <code>char*</code> на <code>zend_string*</code> (#217xx-#219xx). Это НЕ косметика, а <strong>систематическое устранение класса</strong>: <code>zend_string</code> несёт len и живёт по refcount (не <code>efree</code>-по-указателю). Поэтому:</p>
+<ul><li>UAF-класс (2.2) рефакторинг <strong>снимает системно</strong> (refcount, нет незаметного free)</li><li>symlink-цикл НЕ решается zend_string (нужен именно Floyd) — обезболивающие остаются</li><li><code>zend_string</code> делает сбои детектируемыми, а не segfault-тихими</li></ul>
+<p><strong>Вывод:</strong> рефакторинг — правильный курс; symlink-патчи — постоянный остаток; UAF-класс уйдёт с <code>zend_string*</code>. Пример регрессии от рефакторинга: <code>#21943 "Fix path overread from recent refactoring"</code> — та же функция.</p>
+<h2>4. Behavioral-изменения (ломающие совместимость)</h2>
+<ul><li>2026-08: <strong>только <code>.phar</code> расширение триггерит авто-детект архива</strong> (#23260) — сужение</li><li>2026-06: <code>.phar</code>-префикс non-magic dir handling (#22372)</li><li>2026-06: ZIP extra field length underflow (#22330)</li><li>2025-11: case-insens <code>__halt_compiler()</code> при чтении stub (GH-20442)</li><li>2025-10: freeing phar alias может инвалидировать PharFileInfo (GH-20302)</li><li>2025-05: <code>.phar</code> magic-directory preservation в <code>addEmptyDir()</code></li></ul>
+<h2>5. Рекомендация (если задача — аудит phar при портировании)</h2>
+<p>Актуальный риск потребления phar-файлов: <strong>2025-11 assertion-crashes, 2026-05/07/08 UAF + symlink-recurка</strong>. Для FreeUnit-порта: трактовать phar как враждебный ввод, ограничить глубину цепочки ссылок, и — если идёт портирование на Rust/иное → <code>zend_string</code>-эквивалент (len + refcount) снимает класс UAF.</p>
+<script src="/freeunit-kb/assets/kb.js"></script>
+</body></html>

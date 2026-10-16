@@ -1,0 +1,18 @@
+:root { color-scheme: light dark; }
+body { max-width: 52rem; margin: 2rem auto; padding: 0 1rem;
+       font: 16px/1.6 system-ui, sans-serif; }
+nav.crumbs { font-size: .9rem; opacity: .8; margin-bottom: 1rem; }
+h1, h2, h3 { line-height: 1.25; }
+pre { background: rgba(127,127,127,.12); padding: .8rem; overflow-x: auto; }
+code { background: rgba(127,127,127,.12); padding: .1rem .3rem; }
+pre code { background: none; padding: 0; }
+table { border-collapse: collapse; width: 100%; margin: 1rem 0; }
+th, td { border: 1px solid rgba(127,127,127,.35); padding: .3rem .5rem;
+         text-align: left; vertical-align: top; }
+table.meta th { width: 9rem; }
+.banner { padding: .5rem .8rem; border-radius: .3rem; margin: 0 0 1rem; }
+.banner.ok { background: rgba(40,160,80,.15); }
+.banner.warn { background: rgba(200,140,0,.18); border-left: 4px solid #c88c00; }
+#q { width: 100%; padding: .5rem; font-size: 1rem; }
+#hits li { margin: .4rem 0; }
+#hits .where { opacity: .7; font-size: .85rem; }

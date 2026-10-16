@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>engineering/zen-review-pr-280</title>
+<link rel="stylesheet" href="/freeunit-kb/assets/kb.css">
+</head><body>
+<nav class="crumbs"><a href="/freeunit-kb/index.html">index</a> / engineering/zen-review-pr-280</nav>
+
+<h1>engineering/zen-review-pr-280</h1>
+
+<h1>zen-review PR #280 — router: add an optional bound on an application start</h1>
+<p>_2026-09-08. Review of freeunitorg/freeunit#280. +2242/−55, 13 files. APPRoved._</p>
+<h2>The failure it closes</h2>
+<p>A worker is forked but never answers PROCESS_READY (e.g. <code>/bin/sleep</code> as the app). It stays alive, so no REMOVE_PID arrives, so the START_PROCESS RPC stays armed for the life of the router. With <code>processes: {spare: 0}</code> that wedges the application with no way to bound the wait. <code>start_timeout</code> is an operator knob to bound it.</p>
+<h2>The mechanism (sound)</h2>
+<ul><li>New config <code>application.limits.start_timeout</code> (seconds), validated like</li></ul>
+<p><code>idle_timeout</code>: not &lt; 0, not &gt; <code>NXT_INT32_T_MAX / 1000</code> (msec overflow bound). Reaches the router through <code>NXT_CONF_MAP_MSEC</code>.</p>
+<ul><li>Deadline timer <code>nxt_router_start_timer_t</code> armed on START_PROCESS.</li><li><strong>Timer-vs-reply race is resolved by construction:</strong> the deadline is driven from</li></ul>
+<p>the payload's completion handler, so a PROCESS_READY landing in the window retires the stream (via the normal reply path) before the deadline can fail it.</p>
+<ul><li>Idempotent single-fire: <code>armed</code> / <code>expired</code> bit flags — the fired timer clears</li></ul>
+<p><code>armed</code> and the error path cannot double-cancel (it checks →armed before <code>nxt_router_start_timer_cancel</code>). The engine's reference is held while the timer node is live (<code>refs++</code>).</p>
+<h2>Verdict: APPROVE</h2>
+<ul><li>Correct bound, precise validation, race resolved through payload completion,</li></ul>
+<p>idempotent. Improves robustness/UX (the failing app is answered 503 rather than wedged in <code>ack_waiting_req</code>).</p>
+<ul><li>New C test <code>nxt_router_start_timeout_test.c</code> + <code>test_app_start_timeout.py</code>.</li><li>CI 41 pass / 0 fail. Mergeable/CLEAN.</li></ul>
+<h2>Notes</h2>
+<ul><li>Sibling: zen-review-pr-289 (start sender auth), pr-291 (MSG_CTRUNC).</li><li>The design comment set is thorough; keep the timer-race reasoning in mind if</li></ul>
+<p>the start path is later touched.</p>
+<script src="/freeunit-kb/assets/kb.js"></script>
+</body></html>

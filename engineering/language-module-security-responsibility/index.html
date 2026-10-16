@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>engineering/language-module-security-responsibility</title>
+<link rel="stylesheet" href="/freeunit-kb/assets/kb.css">
+</head><body>
+<nav class="crumbs"><a href="/freeunit-kb/index.html">index</a> / engineering/language-module-security-responsibility</nav>
+
+<h1>engineering/language-module-security-responsibility</h1>
+
+<h1>Language Module Security — Who Is Responsible</h1>
+<p>FreeUnit supports 8 language runtimes. Each has a different security model.</p>
+<hr>
+<h2>Quick Summary Table</h2>
+<table><thead><tr><th>Language</th><th>Runtime source</th><th>CVE tracking</th><th>FreeUnit action needed?</th></tr></thead><tbody><tr><td><strong>PHP</strong></td><td>Distro (sury.org) + Docker</td><td>sury.org, Debian</td><td>Nothing — distro patches</td></tr><tr><td><strong>Python</strong></td><td>Distro (Debian)</td><td>Debian security</td><td>Nothing — distro patches</td></tr><tr><td><strong>Node.js</strong></td><td>Distro or NodeSource</td><td>Node.js LTS team (Debian tracks LTS)</td><td>Nothing — distro patches</td></tr><tr><td><strong>Go</strong></td><td>Distro (Debian)</td><td>Debian security</td><td>Nothing — distro patches</td></tr><tr><td><strong>Ruby</strong></td><td>Distro (Debian)</td><td>Debian security</td><td>Nothing — distro patches</td></tr><tr><td><strong>Perl</strong></td><td>Distro (Debian)</td><td>Debian security</td><td>Nothing — distro patches</td></tr><tr><td><strong>Java</strong></td><td>Eclipse Temurin</td><td>Adoptium project</td><td><strong>We bundle it in Docker</strong> — partial responsibility</td></tr><tr><td><strong>WASM (wasmtime)</strong></td><td>Bundled tarball</td><td><strong>We track it</strong> (wasmtime releases)</td><td><strong>Full responsibility</strong></td></tr></tbody></table>
+<hr>
+<h2>PHP</h2>
+<p>FreeUnit links against <code>libphp8.X-embed</code> — system package from Debian or sury.org.</p>
+<ul><li>PHP CVEs → sury.org or Debian patches</li><li>FreeUnit Docker images use <code>apt install libphp8.4-embed libphp8.5-embed</code></li><li><code>apt upgrade</code> pulls the fix</li><li>No FreeUnit action needed</li></ul>
+<h2>Python</h2>
+<p>FreeUnit uses CPython via distro package.</p>
+<ul><li>Python CVEs → Debian security</li><li>FreeUnit Docker: <code>apt install python3.13 python3.13-dev</code></li><li>No FreeUnit action needed</li></ul>
+<h2>Node.js</h2>
+<p>FreeUnit links against libnode from distro or NodeSource.</p>
+<ul><li>Node CVEs → Node.js LTS team, then NodeSource, then Debian</li><li>FreeUnit Docker: <code>apt install nodejs</code></li><li>No FreeUnit action needed</li></ul>
+<h2>Go</h2>
+<p>FreeUnit uses Go for the Go language module (tests, not daemon).</p>
+<ul><li>Go CVEs → Debian security</li><li>No FreeUnit action needed</li></ul>
+<h2>Ruby</h2>
+<p>FreeUnit links against libruby from distro.</p>
+<ul><li>Ruby CVEs → Debian security</li><li>No FreeUnit action needed</li></ul>
+<h2>Perl</h2>
+<p>FreeUnit links against libperl from distro.</p>
+<ul><li>Perl CVEs → Debian security</li><li>No FreeUnit action needed</li></ul>
+<h2>Java</h2>
+<p>Java is different — FreeUnit Docker images bundle a specific JDK build (Eclipse Temurin from Adoptium). The JDK is pre-installed in the Docker image.</p>
+<ul><li>Java CVEs → Adoptium project</li><li>FreeUnit Docker: <code>FROM eclipse-temurin:17-jdk</code> or <code>21-jdk</code></li><li><strong>Partial responsibility:</strong> if a Java CVE drops, we need to rebuild our Docker</li></ul>
+<p>images to pick up the new temurin base image</p>
+<ul><li>GitHub Dependabot already tracks Docker base image updates if configured</li></ul>
+<h2>WASM (wasmtime)</h2>
+<p>We download wasmtime source tarballs and compile into the FreeUnit binary.</p>
+<ul><li>wasmtime CVEs → <strong>we track them manually</strong></li><li>Currently: wasmtime 35→36.0.12 in 1.36.0 (sandbox-escape CVE fix)</li><li><strong>Full responsibility</strong></li></ul>
+<hr>
+<h2>What FreeUnit Actually Ships (that we control)</h2>
+<pre><code>In the FreeUnit binary (our code):
+├── C core (nxt_*.c) — our code, our bugs
+├── OTel Rust crate — we compile it, `cargo audit` needed
+├── unitctl (Rust CLI) — we compile it, `cargo audit` needed
+├── fake_upstream, fake_otlp, eol (Rust tools) — we compile them
+└── wasmtime (C/Rust) — we compile it, manual CVE tracking needed
+
+In the Docker image (inherited from Debian):
+├── PHP 8.x — distro handles
+├── Python 3.x — distro handles
+├── Node.js 20/22/24 — distro handles
+├── Go 1.25/1.26 — distro handles
+├── Ruby 3.3/3.4 — distro handles
+├── Perl 5.38/5.40/5.42 — distro handles
+└── Java 17/21 (Temurin) — Adoptium handles, but we pick up via Docker base image</code></pre>
+<hr>
+<h2>Conclusion</h2>
+<table><thead><tr><th>Responsibility</th><th>Who</th><th>What</th></tr></thead><tbody><tr><td>Language runtimes (PHP, Python, Node, Go, Ruby, Perl)</td><td><strong>Debian / distro</strong></td><td><code>apt upgrade</code> handles CVEs</td></tr><tr><td>Java JDK</td><td><strong>Adoptium</strong> via Docker base image rebuild</td><td>Rebuild Docker when temurin updates</td></tr><tr><td>Rust crates (OTel, unitctl)</td><td><strong>FreeUnit</strong></td><td><code>cargo audit</code> in CI — cheap, add it</td></tr><tr><td>wasmtime</td><td><strong>FreeUnit</strong></td><td>Manual CVE tracking — already doing it</td></tr><tr><td>FreeUnit C code</td><td><strong>FreeUnit</strong></td><td>Security audit + our fixes</td></tr></tbody></table>
+<p><strong>The only practical gap was <code>cargo audit</code>.</strong> All language runtimes are handled by the distro. Adding dependabot for Cargo + Go is five lines of YAML, and a <code>cargo audit</code> step is another ten lines. Everything else is already working.</p>
+<script src="/freeunit-kb/assets/kb.js"></script>
+</body></html>

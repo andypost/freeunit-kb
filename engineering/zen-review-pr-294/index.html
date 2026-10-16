@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>engineering/zen-review-pr-294</title>
+<link rel="stylesheet" href="/freeunit-kb/assets/kb.css">
+</head><body>
+<nav class="crumbs"><a href="/freeunit-kb/index.html">index</a> / engineering/zen-review-pr-294</nav>
+
+<h1>engineering/zen-review-pr-294</h1>
+
+<h1>zen-review PR #294 — pkg(eol): sync Ubuntu and Debian EOL dates</h1>
+<p>_2026-09-08. Review of freeunitorg/freeunit#294. Data/docs only, zero runtime code._ _+24/−19 across 3 files: <code>EOL.md</code>, <code>pkg/eol.json</code>, <code>pkg/eol/README.md</code>._</p>
+<h2>What it changes</h2>
+<ul><li>Ubuntu 22.04 EOL 2027-04 → 2027-06; 26.04 2031-04 → 2031-05 (and matching</li></ul>
+<p><code>supported_until</code>). Synced with endoflife.date API.</p>
+<ul><li>Documents the field mapping: <code>eol</code> (standard support end) is always what the</li></ul>
+<p>table tracks. For Debian since Sept 2026 <code>eol</code> became the end of <strong>LTS</strong>, so the tracked security window moved to the API's <code>support</code> field. Ubuntu stays on <code>eol</code> (ESM excluded).</p>
+<h2>Verdict: APPROVE</h2>
+<ul><li>✅ Pure data/doc change — no runtime code, no behavioral risk.</li><li>✅ Dates verified against endoflife.date (README states 2026-09-08 check, no errors).</li><li>✅ Field-mapping note is precise and matches the <code>pkg/eol/</code> per-vendor picker.</li></ul>
+<h2>Notes</h2>
+<ul><li>Duplicate-dates check: entries still inside grace window; only proximity/past-EOL</li></ul>
+<p>warnings, no hard errors.</p>
+<script src="/freeunit-kb/assets/kb.js"></script>
+</body></html>

@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>engineering/zen-review-pr-285</title>
+<link rel="stylesheet" href="/freeunit-kb/assets/kb.css">
+</head><body>
+<nav class="crumbs"><a href="/freeunit-kb/index.html">index</a> / engineering/zen-review-pr-285</nav>
+
+<h1>engineering/zen-review-pr-285</h1>
+
+<h1>zen-review PR #285 — http: handle file truncation in static serving</h1>
+<p>_2026-09-08. Review of freeunitorg/freeunit#285. Author Andrew Clayton (ac000, F5)._ _Branch <code>short-read-fix</code> → master, +5/−0, 1 file (<code>src/nxt_http_static.c</code>)._</p>
+<h2>What it does</h2>
+<p>Re-adds a NARROW guard in <code>nxt_http_static_buf_completion()</code>: if <code>pread()</code> returns <code>n == 0</code> while <code>rest &gt; 0</code> (file shrank after <code>stat(2)</code> — EOF hit early), error out instead of looping. It is a fix of the author's OWN earlier commit.</p>
+<h2>Context (required for the verdict)</h2>
+<p>Commit <code>02d1984c9</code> ("Remove short read check", Jan 2024) deleted a BROAD check that fired on any <code>n != size</code> and aborted delivery on 9p/network filesystems (a legitimate short read yields <code>n &gt; 0</code>). That removal was correct — but it also dropped the truncation case: with <code>n == 0</code> and <code>file_pos</code> not advancing, Unit spun forever expecting missing bytes.</p>
+<h2>Verdict: APPROVE</h2>
+<ul><li>✅ <strong>Does not re-introduce the old bug:</strong> fires ONLY on <code>n == 0</code>, not <code>n != size</code>.</li></ul>
+<p>Legitimate short read (<code>n &gt; 0</code>) still proceeds via <code>file_pos += n</code>. This is a correct narrowing, not a restore.</p>
+<ul><li>✅ <strong>Boundary correctness:</strong> <code>n == 0</code> with <code>rest == 0</code> goes to the <code>n == rest</code></li></ul>
+<p>branch (close/clean); the guard isn't reached. Empty file does not trigger it. Only <code>n == 0</code> with <code>rest &gt; 0</code> (true truncation) errors.</p>
+<ul><li>✅ <strong>Backward compat:</strong> zero change for normal delivery and network filesystems;</li></ul>
+<p>only hang → error.</p>
+<ul><li>⚠️ <strong>No test added</strong> (1 file, src only). Black-box test of a mid-send truncation</li></ul>
+<p>is a timing race with no injection point in the delivery path — not deterministically testable. Acceptable, documented as <code>none (timing race)</code>.</p>
+<h2>Notes</h2>
+<ul><li>Refs <code>02d1984c9</code> (removal of the broad check). Verdict wording: correct narrowing.</li></ul>
+<script src="/freeunit-kb/assets/kb.js"></script>
+</body></html>

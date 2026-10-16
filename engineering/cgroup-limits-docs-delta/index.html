@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>engineering/cgroup-limits-docs-delta</title>
+<link rel="stylesheet" href="/freeunit-kb/assets/kb.css">
+</head><body>
+<nav class="crumbs"><a href="/freeunit-kb/index.html">index</a> / engineering/cgroup-limits-docs-delta</nav>
+
+<h1>engineering/cgroup-limits-docs-delta</h1>
+
+<h1>cgroup limits — documentation delta, ready to apply (2026-10-11)</h1>
+<p><strong>Status: text ready, not applied.</strong> The bot has no write access to <code>freeunitorg/docs</code> (the workbench App is installed on <code>freeunitorg/freeunit-exp</code> only; the personal PAT is read-only — both attested by a non-mutating PATCH probe returning 403). The owner applies this, or adds <code>docs</code> to the App installation and it becomes a bot PR.</p>
+<p>Target file: <code>source/configuration/index.rst</code>, section <strong>"Using control groups"</strong> (<code>.. _conf-app-cgroup:</code>), directly AFTER the "basic use case" block that ends with "refer to the admin guide" and BEFORE the following <code>.. note::</code> about namespaces/cgroups versus cgroup/path.</p>
+<h2>Why: what the current text assumes and what the live probes showed</h2>
+<p>The current section documents <code>path</code> (relative vs absolute) and a "basic use case" that writes <code>memory.high</code> by hand. It never says <strong>where</strong> a limit can exist. Measured on Debian 13 Trixie (kernel 6.12.111) with unitd 1.37.0 (<code>engineering/cgroup-v2-isolation-performance-brief.md</code>):</p>
+<ul><li>A child cgroup has an interface file for a controller **only if its parent enabled that</li></ul>
+<p>controller in <code>cgroup.subtree_control</code>**. Without it there is no <code>memory.max</code>/<code>cpu.max</code> in the app's cgroup at all — nothing fails, the limit simply cannot be expressed.</p>
+<ul><li>A cgroup that has controllers enabled for its children <strong>cannot hold processes</strong></li></ul>
+<p>(<code>cgroup.procs</code> write → <code>EBUSY</code>), and a controller cannot be enabled in a cgroup that already holds processes (<code>EBUSY</code>, errno 16). A <strong>relative</strong> <code>path</code> therefore lands inside Unit's own cgroup, which by construction holds Unit's processes: limits there are <strong>unreachable</strong>, while the app still runs and serves normally.</p>
+<ul><li>An <strong>absolute</strong> path into a process-free parent with the controllers enabled gives the</li></ul>
+<p>full interface (<code>memory.max</code>, <code>memory.high</code>, <code>memory.swap.max</code>, <code>cpu.max</code>, <code>pids.max</code>, <code>memory.oom.group</code>), and the limits are enforced (measured: <code>nr_throttled 24 / 25</code> periods at a 0.5-CPU quota; a 64M <code>memory.max</code> produced <code>oom_kill 1</code>, an HTTP 503 for the offending request, and Unit respawned the app).</p>
+<ul><li>A <strong>threaded</strong> target (<code>cgroup.type=threaded</code>) is accepted by Unit and the app is placed</li></ul>
+<p>inside it, but whether it can carry limits was a separate question when this text was written; the brief's phase D probe answers it — a threaded cgroup carries no limit interface at all.</p>
+<h2>The inserted text (RST, paste-ready)</h2>
+<pre><code class="language-rst">
+Where a limit can live
+----------------------
+
+Unit *places* the application in the cgroup you name;
+it never writes a limit file itself.
+A cgroup carries the interface file of a controller
+(for example, **memory.max** or **cpu.max**)
+only when its **parent** enables that controller
+in the parent&#x27;s **cgroup.subtree_control**;
+otherwise the file does not exist in the app&#x27;s cgroup
+and a limit simply cannot be set there,
+without any error from Unit.
+
+Enable the controllers you intend to use
+in a cgroup that will be the **parent** of the app&#x27;s cgroup,
+and keep that parent **free of processes**:
+a cgroup that has controllers enabled for its children
+cannot hold processes of its own (**cgroup.procs** writes fail with **EBUSY**),
+and a controller cannot be enabled in a cgroup that already holds processes.
+
+.. note::
+
+   Because of the rules above,
+   a **relative** **path** is not usable for limits:
+   Unit creates it inside its own main-process cgroup,
+   which always holds Unit&#x27;s processes,
+   so the controllers cannot be enabled there
+   and the app&#x27;s cgroup has no limit interface at all.
+   Use an **absolute** **path** under a process-free parent
+   when you intend to limit the application.
+
+Recipes per platform:
+
+.. code-block:: console
+
+   # systemd: delegate the service, then give the apps a process-free parent
+   $ systemctl edit unit
+       [Service]
+       Delegate=yes
+       DelegateControllers=cpu memory pids
+   $ systemctl daemon-reload &amp;&amp; systemctl restart unit
+   # the app cgroup must NOT be the service cgroup itself:
+   #   { &quot;isolation&quot;: { &quot;cgroup&quot;: { &quot;path&quot;: &quot;/apps/drupal&quot; } } }
+   $ mkdir -p /sys/fs/cgroup/apps
+   $ echo &#x27;+cpu +memory +pids&#x27; &gt; /sys/fs/cgroup/apps/cgroup.subtree_control
+   $ echo 512M &gt; /sys/fs/cgroup/apps/drupal/memory.max
+
+.. code-block:: console
+
+   # bare cgroupfs (no service manager)
+   $ mkdir -p /sys/fs/cgroup/apps
+   $ echo &#x27;+cpu +memory +pids&#x27; &gt; /sys/fs/cgroup/apps/cgroup.subtree_control
+
+   # container: the runtime&#x27;s cgroup parent is delegated by the runtime;
+   # point &quot;path&quot; at an absolute path under it and set the limits from the host.</code></pre>
+<h2>Open items before this can be merged</h2>
+<ol><li><strong>RESOLVED 2026-10-11 (phase D probe).</strong> A <code>cgroup.type=threaded</code> target carries <strong>no</strong></li></ol>
+<p><code>memory.max</code>, <code>cpu.max</code>, <code>pids.max</code> or <code>memory.current</code> at all (writes fail with EACCES because cgroupfs exposes no such file there), while Unit still accepts the config and places the app inside it. So the docs must state that a threaded cgroup cannot be limited, and the product question (warn at validation vs refuse vs document) goes to the maintainer. Add one sentence to the inserted <code>.. note::</code> when that decision lands.</p>
+<ol><li><code>DelegateControllers=</code> requires a systemd new enough to accept it; the recipe must name</li></ol>
+<p>the fallback for older systemd (create the parent by hand as root, as in the second block).</p>
+<ol><li>English prose style: the project's docs use one sentence per line — keep that when applying.</li></ol>
+<script src="/freeunit-kb/assets/kb.js"></script>
+</body></html>

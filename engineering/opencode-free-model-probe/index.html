@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>engineering/opencode-free-model-probe</title>
+<link rel="stylesheet" href="/freeunit-kb/assets/kb.css">
+</head><body>
+<nav class="crumbs"><a href="/freeunit-kb/index.html">index</a> / engineering/opencode-free-model-probe</nav>
+
+<h1>engineering/opencode-free-model-probe</h1>
+
+<h1>OpenCode Free tier — model capability probe (2026-09-03)</h1>
+<p>Method: keyless POST to <code>opencode.ai/zen/v1/chat/completions</code> (empty <code>Authorization</code>, system <code>User-Agent</code>). Model list is live from <code>/v1/models</code>; the <code>opencode-free</code> provider profile is keyless by design (see <code>hermes_cli/.../opencode_free</code>).</p>
+<h2>Availability (ping round, "say hi")</h2>
+<table><thead><tr><th>Model</th><th>Verdict</th><th>Latency</th><th>Note</th></tr></thead><tbody><tr><td>laguna-s-2.1-free</td><td>OK</td><td>2.7s</td><td>fastest, good structured answers; Hermes default_aux_model</td></tr><tr><td>ling-3.0-flash-fin-free</td><td>OK</td><td>~3s</td><td>fast; but often returns content without answering the prompt format</td></tr><tr><td>nemotron-3.5-lightning-free</td><td>OK</td><td>5-6s</td><td>emits full thinking preamble; verdict buried in reasoning</td></tr><tr><td>nemotron-3-ultra-free</td><td>OK</td><td><strong>41s</strong></td><td>slow on trivial request; verdict inside reasoning block</td></tr><tr><td>deepseek-v4-flash-free</td><td>DOWN</td><td>—</td><td>400 "Model is unavailable" (upstream removed)</td></tr><tr><td>muse-spark-1.3-contributor-free</td><td>DOWN</td><td>—</td><td>500 Internal server error</td></tr><tr><td>muse-spark-1.2-contributor-free</td><td>DOWN</td><td>—</td><td>500 Internal server error</td></tr><tr><td>mimo-v2.5-free</td><td>RATE-LIMIT</td><td>—</td><td>429 FreeUsageLimitError (quota)</td></tr></tbody></table>
+<h2>Format-following on real PR #266 (TLS session-resume race test)</h2>
+<table><thead><tr><th>Model</th><th>Verdict</th><th>#51 impact</th><th>Latency</th><th>Format</th></tr></thead><tbody><tr><td>laguna-s-2.1-free</td><td>CORRECT</td><td>PARTIALLY-CLEARED</td><td>4.6s</td><td>clean, all 4 lines</td></tr><tr><td>ling-3.0-flash-fin-free</td><td>—</td><td>—</td><td>3.2s</td><td>no verdict (parrots prompt)</td></tr><tr><td>nemotron-3.5-lightning-free</td><td>(buried)</td><td>—</td><td>4.9s</td><td>thinking preamble, no clean verdict</td></tr><tr><td>nemotron-3-ultra-free</td><td>(reasoning)</td><td>—</td><td>41s</td><td>correct reasoning, slow</td></tr></tbody></table>
+<h2>Conclusion</h2>
+<ul><li>Free tier is <strong>unstable</strong>: 3/8 down, 1 rate-limited at the moment of testing.</li><li><strong>laguna-s-2.1-free</strong> is the only one that both answers fast AND follows an exact</li></ul>
+<p>4-line output format reliably. Good default for aux/derivative model.</p>
+<ul><li>nemotron-3.5/3.0 are technically capable but emit long thinking blocks and are</li></ul>
+<p>slow (3.0 extremely so) — poor for high-frequency review loops.</p>
+<ul><li>Reasonable, fast code-review/issue-analysis proxy = <strong>laguna</strong> + (retry) <strong>mimo</strong>.</li></ul>
+<p>For deep reasoning at lower cadence, a paid model is preferable; free tier is best for cheap auxiliary passes.</p>
+<p>Caveats: all free models are "limited time" promo — expect churn. Free tier throttles (free usage limit) so fan-out batches will hit 429. Track live list, don't hardcode.</p>
+<script src="/freeunit-kb/assets/kb.js"></script>
+</body></html>

@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FreeUnit v1 Roadmap</title>
+<link rel="stylesheet" href="/freeunit-kb/assets/kb.css">
+</head><body>
+<nav class="crumbs"><a href="/freeunit-kb/index.html">index</a> / v1/roadmap</nav>
+
+<h1>FreeUnit v1 Roadmap</h1>
+<table class="meta"><tr><th>description</th><td>12-month technical roadmap for FreeUnit v1</td></tr><tr><th>tags</th><td>freeunit, v1, roadmap, cross-cutting, php, python, ruby, governance</td></tr><tr><th>resources</th><td>https://github.com/andypost/unit/blob/roadmap/roadmap/unit-roadmap.md</td></tr></table>
+<h1>FreeUnit v1 Roadmap</h1>
+<p>Consolidated technical roadmap. Source: <code>roadmap/unit-roadmap.md</code> in <code>andypost/unit</code>.</p>
+<h2>Cross-cutting (X) — designed once in router/controller/libunit</h2>
+<table><thead><tr><th>Code</th><th>Description</th><th>Estimate</th></tr></thead><tbody><tr><td>X1</td><td>Unified preload/warmup contract in libunit</td><td>~1 week</td></tr><tr><td>X2</td><td>Unified status API schema</td><td>~1 week + 3 days/SAPI</td></tr><tr><td>X3</td><td>Graceful reload endpoint (POST /control/.../reload)</td><td>~2 wks (endpoint), 7-8 wks (full)</td></tr><tr><td>X4</td><td>Persistent-worker contract (nxt_unit_request_loop_t)</td><td>~3 weeks</td></tr><tr><td>X5</td><td>Scheduler primitive (POST /run + cron config)</td><td>1-4 weeks</td></tr><tr><td>X9</td><td>ACME/auto-TLS (PUT-overwrite cert + auto re-apply → lego sidecar → in-daemon)</td><td>days → weeks</td></tr><tr><td>X10</td><td>Daemon-internal scheduler (cert renewal, module swap, config re-apply; pairs w/ X9)</td><td>~2 weeks</td></tr><tr><td><strong>X11</strong></td><td><strong>Modular TLS — move SSL/TLS into a loadable <code>tls.unit.so</code> (OpenSSL → rustls). One module serves server-side control-API TLS (D7) + client-side ACME (X9). Keeps the core TLS-dependency-free.</strong></td><td><strong>~4-6 weeks</strong></td></tr><tr><td>X6</td><td>Per-target env/venv overrides</td><td>~1 week</td></tr><tr><td>X7</td><td>OpenTelemetry span conventions</td><td>~1 week</td></tr><tr><td>X8</td><td>Metrics endpoint (Prometheus /metrics)</td><td>~1 week</td></tr></tbody></table>
+<h2>Core daemon (D) — language-independent</h2>
+<table><thead><tr><th>Code</th><th>Description</th><th>Estimate</th></tr></thead><tbody><tr><td>D1</td><td>32-bit ARM alignment (armv7/armhf)</td><td>1-2 weeks</td></tr><tr><td>D2</td><td>HTTP/2 in router</td><td>~3 months</td></tr><tr><td>D3</td><td>HTTP body streaming improvements</td><td>~2 weeks</td></tr><tr><td>D4</td><td>TLS modernization (OCSP, ECH, PQC)</td><td>~2 weeks</td></tr><tr><td>D5</td><td>Config validation / error messages</td><td>~1 week</td></tr><tr><td>D6</td><td>JSON Patch / Merge Patch for API</td><td>~2 weeks</td></tr><tr><td>D7</td><td>Control API authentication</td><td>~3 weeks</td></tr><tr><td>D8</td><td>Structured logging (JSON)</td><td>~1 week</td></tr><tr><td>D9</td><td>systemd socket activation</td><td>~1 week</td></tr><tr><td>D10</td><td>Fuzzing coverage</td><td>~1 week</td></tr></tbody></table>
+<h2>Governance (G)</h2>
+<table><thead><tr><th>Code</th><th>Description</th></tr></thead><tbody><tr><td>G1</td><td>Supported-versions matrix</td></tr><tr><td>G2</td><td>Security disclosure process (GHSAs, CVEs)</td></tr><tr><td>G3</td><td>Release cadence policy</td></tr><tr><td>G4</td><td>Public CI matrix</td></tr><tr><td>G5</td><td>Package distribution (APK, DEB, RPM, Homebrew)</td></tr><tr><td>G6</td><td>Documentation site</td></tr><tr><td>G7</td><td>Migration guides</td></tr><tr><td>G8</td><td>Upstream patch triage</td></tr><tr><td>G9</td><td>Contributor pipeline</td></tr><tr><td>G10</td><td>Naming/rebranding hygiene</td></tr></tbody></table>
+<h2>Consolidated timeline (12 months)</h2>
+<table><thead><tr><th>Mo</th><th>Core</th><th>Cross</th><th>PHP</th><th>Python</th><th>Ruby</th><th>Gov</th></tr></thead><tbody><tr><td>1</td><td>D1, D5</td><td>X1, X2</td><td>P3</td><td>P2, P3</td><td>P2-P4</td><td>G1, G2</td></tr><tr><td>2</td><td>D9, D8</td><td>X3, X6</td><td>P1, P2</td><td>P1</td><td>P1</td><td>G4</td></tr><tr><td>3</td><td>D4</td><td>X5(p1)</td><td>P5</td><td>P4</td><td>P8, P9</td><td>G3, G6</td></tr><tr><td>4</td><td>D6</td><td>X5(p2)</td><td>P6, P7</td><td>P7, P9</td><td>P7, P10</td><td>G5</td></tr><tr><td>5</td><td>D3</td><td>X4</td><td>P4</td><td>P5</td><td>P5</td><td>G7</td></tr><tr><td>6</td><td>D2(st)</td><td>X7, X8</td><td>P8</td><td>P8</td><td>P6</td><td>G8</td></tr><tr><td>7-9</td><td>D2(sh)</td><td>-</td><td>P10</td><td>P10</td><td>P11</td><td>G10</td></tr><tr><td>10-12</td><td>D7, D10</td><td>-</td><td>P11</td><td>P11</td><td>P13</td><td>G9</td></tr></tbody></table>
+<h2>Feature relationships (dependency map)</h2>
+<p>Which features <strong>enable / block / compose</strong> others. Derived from the code (2026-09-10) and the ACME / scheduler / TLS plan docs. <code>→</code> = depends on / enabled by.</p>
+<h3>The TLS cluster (X11 is the hub)</h3>
+<pre><code>X11 (modular TLS: tls.unit.so, OpenSSL→rustls)
+  ├─ serves → D7  (server-side TLS/mTLS on the TCP control socket)
+  ├─ serves → X9  (client-side HTTPS to the ACME CA)
+  └─ overlaps → D4 (TLS modernization: OCSP/ECH/PQC live in the TLS backend)</code></pre>
+<ul><li><strong>D7 ← X11</strong>: the TCP control-socket path needs TLS; without X11 that forces OpenSSL on the</li></ul>
+<p>whole core. With X11 it is opt-in. <strong>This is why D7 and X11 must be sequenced together.</strong></p>
+<ul><li><strong>X9 ← X11</strong>: ACME is a TLS <strong>client</strong>; <code>acme-tls-plan.md</code> names the missing piece as</li></ul>
+<p>"resolver + TLS-client transport + minimal HTTP client". X11 provides the transport.</p>
+<ul><li><strong>D4 ∈ X11 scope</strong>: OCSP/ECH/PQC are backend features; doing X11 first avoids touching</li></ul>
+<p>14 core files twice.</p>
+<h3>The scheduler cluster</h3>
+<pre><code>X5 (scheduler primitive: POST /run + cron config)
+  └─ X10 (daemon-internal scheduler) uses X5
+        ├─ triggers → X9  (acme/renew)
+        ├─ triggers → X11 (module/check-update + zero-downtime swap)
+        └─ triggers → X3  (config re-apply / reload)</code></pre>
+<ul><li><strong>X10 ← X5</strong>: X5 is the Phase-B <code>/run</code> primitive; X10 is the Phase-D policy layer.</li><li><strong>X10 ← X11</strong>: the scheduler's "module swap on CVE" action needs the module boundary.</li><li><strong>X10 ← X3</strong>: <code>config/reload</code> reuses the graceful-reload endpoint.</li></ul>
+<h3>ACME ↔ D7 ↔ Docker (the decision triangle)</h3>
+<pre><code>ACME (X9)  ── needs ──▶  TLS client  ──▶  X11
+D7         ── needs ──▶  TLS server  ──▶  X11
+Docker     ── blocks ─▶  unix-only control │ needs TCP+auth ──▶ D7 ──▶ X11</code></pre>
+<ul><li><strong>Docker's blocker is the trigger for D7</strong>: a container reaches the control socket from</li></ul>
+<p><em>outside</em>, needing TCP + auth (upstream #1315). D7 → X11.</p>
+<ul><li><strong>ACME is the visible differentiator</strong> (<code>acme-tls-plan.md</code>: "do NOT gate ACME behind</li></ul>
+<p>Control API auth") — but both share X11, so <strong>build X11 once, feed both</strong>.</p>
+<h3>Sequencing implication (proposed)</h3>
+<ol><li><strong>X11 first</strong> (or alongside) — it unblocks D7 <em>and</em> X9's client transport <em>and</em> D4.</li><li><strong>X9 Step 1</strong> (PUT-overwrite, days) ships value alone, no TLS needed — independent.</li><li><strong>D7</strong> on top of X11 (server TLS) — the internal-hardening payoff.</li><li><strong>X10</strong> last (scheduler) — composes X5/X9/X11/X3.</li></ol>
+<h3>Non-TLS relationships (for context)</h3>
+<ul><li><strong>X4 (persistent workers) → D3 (body streaming)</strong>: both touch the request loop; X4 is the</li></ul>
+<p>contract, D3 is the streaming improvement.</p>
+<ul><li><strong>X2 (status API) ↔ X8 (metrics)</strong> and <strong>D8 (JSON logging)</strong>: same observability family.</li><li><strong>A4 (capget/Docker) ↮ D7</strong>: both are Docker-adoption, but capget is <em>hardening</em> (KB:</li></ul>
+<p>"severity: hardening, not P0"), while D7/X11 is the real container-control gap.</p>
+<p><strong>Sources:</strong> <code>engineering/control-api-auth-d7.md</code> (D7 + X11 + Docker), <code>engineering/acme-tls-plan.md</code> (X9), <code>engineering/scheduled-tasks-plan.md</code> (X10 + X11 pairing), <code>engineering/rust-toolchain-policy.md</code> (Rust build toolchain; rustls precedent).</p>
+<script src="/freeunit-kb/assets/kb.js"></script>
+</body></html>

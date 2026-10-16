@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>engineering/rapira-rs-php-server-notes</title>
+<link rel="stylesheet" href="/freeunit-kb/assets/kb.css">
+</head><body>
+<nav class="crumbs"><a href="/freeunit-kb/index.html">index</a> / engineering/rapira-rs-php-server-notes</nav>
+
+<h1>engineering/rapira-rs-php-server-notes</h1>
+<table class="meta"><tr><th>created</th><td>2026-09-23 by SOUL. Sources: rapira.rs (home, /docs/intro,</td></tr></table>
+<h1>Rapira (rapira.rs) — competitor notes (FreeUnit landscape)</h1>
+<p><strong>Created:</strong> 2026-09-23 by SOUL. Sources: rapira.rs (home, /docs/intro, /docs/process-model, /docs/execution-modes, /docs/http, /blog), README of github.com/rapira-rs/rapira, GitHub org API (public, unauthenticated).</p>
+<h2>What it is</h2>
+<ul><li>PHP application server written in <strong>Rust</strong>, MIT, public since 2026-07-26.</li><li><strong>By the RoadRunner maintainers</strong> — the Go/RoadRunner line continued, but</li></ul>
+<p>restarted as: Rust + <strong>embedded PHP interpreter</strong> (custom SAPI, Zend in the server process). No FastCGI between server and PHP; no PHP-CLI workers and no Goridge JSON IPC in-process (Goridge/FastCGI/C ABI appear only as extension surfaces in the SDK story).</p>
+<ul><li>Org <code>rapira-rs</code>: main repo <code>rapira</code> (Rust, 39★ on 2026-09-23, described as</li></ul>
+<p>"SAPI core API used to integrate with PHP SAPI and provide API for plugins"), plus <code>rapira-windows</code> (ZTS build), <code>sdk-php</code>, <code>http-php</code> (PSR-7 server-request factories per mode), <code>testing-php</code> (live-server test harness), <code>contract</code>, <code>symfony</code>, docs repo. Sponsor: Buhta (buhta.com).</p>
+<ul><li>Builds: Linux + macOS, separate payloads for PHP 8.4 and 8.5, each with its</li></ul>
+<p>own libphp; PHP 8.4 ships <code>opcache.so</code> beside libphp, 8.5 has OPcache inside libphp. Docker <code>ghcr.io/rapira-rs/rapira:php8.5</code>. Config = <code>rapira.toml</code>.</p>
+<h2>Process model (remarkably close to FreeUnit's shape)</h2>
+<ul><li>One <strong>master</strong> + worker pool. Master: binds listen socket(s), starts PHP</li></ul>
+<p><strong>once</strong> (MINIT in the single-threaded master → OPcache creates its SHM segment), then forks workers; every child inherits socket + initialized engine + the same OPcache segment (one worker compiles, others reuse).</p>
+<ul><li>Each worker = one NTS interpreter + async HTTP server (<strong>hyper</strong> on a private</li></ul>
+<p>tokio runtime, two threads), calls <code>accept()</code> on the inherited socket; the OS distributes connections. Master serves nothing, <code>poll(2)</code> on a self-pipe, ~1 s maintenance, optional <code>ondemand</code> accept.</p>
+<ul><li>Requests never cross a process boundary. Same pool creation/supervision/</li></ul>
+<p>reloads in all three modes; only <code>pool.mode</code> changes in-worker handling.</p>
+<h2>Execution modes (<code>pool.mode</code> / <code>Rapira\Mode</code>)</h2>
+<ul><li><strong>Classic</strong> — request per PHP request, as under php-fpm ("a current</li></ul>
+<p>application can run without code changes when Rapira replaces php-fpm").</p>
+<ul><li><strong>Worker</strong> — script initialized once, loop handles requests, superglobals</li></ul>
+<p>refilled per request; static state persists.</p>
+<ul><li><strong>Dispatcher</strong> — script gets request objects through an API call, can</li></ul>
+<p>process sequentially or <strong>concurrently with fibers</strong>; superglobals not used.</p>
+<h2>HTTP side</h2>
+<ul><li>Own HTTP/1.1 + HTTP/1.0 server on hyper; parses requests itself, no</li></ul>
+<p>proxying to another server; middleware can answer before PHP (static files).</p>
+<ul><li><strong>No TLS</strong> — expects a TLS-terminating proxy in front. CONNECT → 501.</li></ul>
+<p><code>http.keepalive_timeout_secs</code> default 60 → 408 then close.</p>
+<ul><li>Careful CGI mapping (<code>$_SERVER</code>, absolute-form targets, authority vs Host).</li></ul>
+<h2>Positioning vs our landscape</h2>
+<ul><li><strong>Slot = same as FrankenPHP</strong> (embedded SAPI + persistent worker mode), and</li></ul>
+<p><strong>supersedes RoadRunner's</strong> design (RoadRunner: Go server + PHP-CLI workers + JSON-over-pipes IPC + TLS/HTTP2 built in). Rapira trades those for embedded Zend and no TLS.</p>
+<ul><li><strong>Direct neighbour of FreeUnit</strong>: PHP app server, master/worker with shared</li></ul>
+<p>listen socket, interpreter inside the server process, own HTTP server, TLS left to a proxy, php-fpm drop-in for the classic path. Differences: Rust (vs C), TOML config + <code>rapira.toml</code> (vs nginx-derived config), hyper/tokio (vs our event loop), no TLS/HTTP2/3 yet, HTTP-only feature set, young (~39★, no plugin parity — "plans to support more RoadRunner plugin functions"), Linux/macOS only (Windows via a separate ZTS build).</p>
+<ul><li><strong>Its compatibility trick is protocol-level, not engine-level:</strong> Rapira does</li></ul>
+<p>NOT imitate PHP's engine — it hosts the real Zend. It imitates <strong>php-fpm's deployment contract</strong> (classic mode = drop-in). FreeUnit's analogue is nginx-config/drop-in compatibility.</p>
+<ul><li>The same split appears across this space: one design owns the</li></ul>
+<p>accept/queue/protocol path and embeds the engine in process, another is a FastCGI drop-in for php-fpm. The direction of imitation differs — some replace the engine and skin PHP, Rapira keeps the engine and imitates the server.</p>
+<h2>Watch items</h2>
+<ul><li>Plugin parity with RoadRunner (queues, metrics, gRPC, hot reload).</li><li>If HTTP/2, TLS, or an in-process engine embedding path appears, Rapira</li></ul>
+<p>becomes the closest structural rival to FreeUnit.</p>
+<ul><li>Ext-php-rs/Zend embedding is the same technical ground as FreeUnit's</li></ul>
+<p>in-process OPcache/fork work — worth diffing their SAPI choices.</p>
+<script src="/freeunit-kb/assets/kb.js"></script>
+</body></html>

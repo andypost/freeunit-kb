@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>engineering/zen-review-pr-265</title>
+<link rel="stylesheet" href="/freeunit-kb/assets/kb.css">
+</head><body>
+<nav class="crumbs"><a href="/freeunit-kb/index.html">index</a> / engineering/zen-review-pr-265</nav>
+
+<h1>engineering/zen-review-pr-265</h1>
+
+<h1>zen-review PR #265 — php: give the module automount.language_deps mounts</h1>
+<p>_2026-09-08. Review of freeunitorg/freeunit#265 (OPEN, branch <code>php/automount-language-deps</code>). Quorum DIVERGENT → resolved instrumentally via tool-agent on the branch worktree. Approve to merge._</p>
+<h2>What it fixes</h2>
+<p>PHP was the only language module declaring no mounts (<code>src/nxt_php_sapi.c</code> <code>NULL, 0</code>), so an <code>isolation.rootfs</code> PHP app got nothing bound from host, while Java/Python/Ruby each get their dirs. A PHP built with <code>--with-system-tzdata</code> (Debian/Ubuntu/Fedora all carry it) reads the tz database lazily at request time; Unit chroots the worker before <code>nxt_php_start()</code>, so the read resolves inside the rootfs — missing db → distro patch derefs NULL → worker SIGSEGV on first <code>date()</code>.</p>
+<h2>Root cause (verified)</h2>
+<p>Unit v1.36 vs PHP rootfs + system-tzdata: chroot happens before tz init, db must be present in rootfs. Product half of #256. Design = <code>plan-php85-rootfs.md §4</code>.</p>
+<h2>Mechanism</h2>
+<p>Mirrors <code>auto/modules/python</code>/<code>java</code>: <code>auto/modules/php</code> generates <code>nxt_&lt;module&gt;_mounts.h</code>, build rule passes <code>-DNXT_PHP_MOUNTS_H</code>, <code>src/nxt_php_sapi.c</code> includes it and wires <code>NXT_PHP_MOUNTS</code>/<code>NXT_PHP_NMOUNTS</code> into <code>nxt_app_module</code>. Mount shape = Java jars: <code>NXT_FS_BIND, "bind", flags 0, builtin 1, deps 1</code> → language dependency, so <code>"automount":{"language_deps":false}</code> opts out via the one shared gate.</p>
+<h2>Verdict: APPROVE</h2>
+<ul><li>✅ Root cause correct (tzdb missing in chrooted worker).</li><li>✅ Design mirrors established language mounts (python/java), reuses shared gate.</li><li>✅ Fail-safe (see "quorum concerns closed") — author documented the trade-off.</li><li>✅ Files: <code>auto/modules/php</code> +304, <code>src/nxt_php_sapi.c</code> wired.</li></ul>
+<h2>Quorum concerns closed (tool-verified, branch worktree)</h2>
+<p>Blind quorum (muse + ling) returned PARTIAL because it had no diff. Instrumental pass on branch <code>php/automount-language-deps</code> CONFIRMED the defenses the quorum claimed were absent:</p>
+<ul><li><code>abs=trust</code>: path comes from the distro's build config (Fedora/Remi) — that IS</li></ul>
+<p>the target package's build setting; comment <code>--with-system-tzdata</code> (line 284) explicitly trusts the build host.</p>
+<ul><li>cross-host case: <code>auto/modules/php:412</code> — probe loop trusts build host to look</li></ul>
+<p>like the rootfs.</p>
+<ul><li><code>a spurious mount beats a SIGSEGV</code>: line 292 — the mount-over-missing trade-off</li></ul>
+<p>is deliberate (error toward mounting is safer than a crash).</p>
+<ul><li>Sanitization: line 517 refuses control characters; relative paths refused</li></ul>
+<p>(honest warning instead). Whitespace-path reconstruction warns.</p>
+<h2>Notes</h2>
+<ul><li>Refs #256 (product half), <code>plan-php85-rootfs.md §4</code>.</li><li>Test half covered separately; this covers the product mount.</li></ul>
+<script src="/freeunit-kb/assets/kb.js"></script>
+</body></html>

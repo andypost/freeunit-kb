@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>engineering/release-1.36.0-what-we-fixed</title>
+<link rel="stylesheet" href="/freeunit-kb/assets/kb.css">
+</head><body>
+<nav class="crumbs"><a href="/freeunit-kb/index.html">index</a> / engineering/release-1.36.0-what-we-fixed</nav>
+
+<h1>engineering/release-1.36.0-what-we-fixed</h1>
+
+<h1>FreeUnit 1.36.0 — What We Fixed</h1>
+<h2>By Category (with security impact)</h2>
+<hr>
+<h3>🔴 Security: Configuration Injection (5 fixes)</h3>
+<p><strong>C-string NUL injection</strong> — reject empty and embedded-NUL values in config strings used as <code>\0</code>-terminated C strings. Before: <code>"user\0root"</code> silently became <code>"user"</code> (truncation). Now: rejected at config load.</p>
+<table><thead><tr><th>Surface</th><th>Fixed</th><th>Impact</th></tr></thead><tbody><tr><td><code>user</code>, <code>group</code>, <code>working_directory</code>, <code>stdout</code>, <code>stderr</code>, <code>executable</code></td><td>Empty + NUL</td><td>Target confusion → another user/command</td></tr><tr><td>Unix socket pathname addresses</td><td>Empty + NUL</td><td>Socket path truncation</td></tr><tr><td><code>access_log</code> (string + object forms)</td><td>Empty + NUL</td><td>Log file redirection</td></tr><tr><td>TLS <code>certificate</code> + njs <code>js_module</code> names</td><td>Empty + NUL</td><td>Wrong cert/module loaded</td></tr><tr><td>PHP <code>options.file</code> php.ini path</td><td>Empty + NUL</td><td>Malicious php.ini loaded</td></tr><tr><td>Templated <code>share</code>/<code>chroot</code> paths (variable-resolved)</td><td>NUL</td><td>Static file served from wrong directory</td></tr></tbody></table>
+<pre><code>Before: &quot;user&quot;: &quot;www-data\0root&quot; → parsed as &quot;www-data&quot; (truncated after NUL)
+After:  Config load fails with clear error → safe</code></pre>
+<hr>
+<h3>🔴 Security: Path Traversal (3 fixes)</h3>
+<p><strong>rootfs as <code>/</code></strong> — reject <code>"/"</code>, <code>"/."</code>, <code>"/foo/.."</code> → chroot("/") is a no-op, defeating isolation silently.</p>
+<p><strong>openat2 TOCTOU</strong> — mount rootfs automount destinations via <code>/proc/self/fd</code> on the openat2-validated descriptor, not by re-resolving the path.</p>
+<pre><code>Before:  openat2(RESOLVE_BENEATH, &quot;/var/www&quot;) → OK
+         mount(&quot;/var/www&quot;, ...) ← symlink could have been swapped between calls
+After:   openat2(RESOLVE_BENEATH, &quot;/var/www&quot;) → fd = 5
+         mount(&quot;/proc/self/fd/5&quot;, ...) ← TOCTOU eliminated, same inode</code></pre>
+<p><strong>NUL in cgroup path + rootfs isolation</strong> — reject embedded NUL in <code>rootfs</code> and cgroup <code>path</code>.</p>
+<hr>
+<h3>🔴 Security: HTTP Smuggling Prevention (3 fixes)</h3>
+<p><strong>Duplicate upstream Content-Length</strong> — both headers dropped, body read to EOF.</p>
+<pre><code>Before:  upstream sends: Content-Length: 20, Content-Length: 6, body(20 bytes)
+         Unit relays Content-Length: 6, body(20 bytes) → downstream sees 6,
+         reads 6 bytes, 14 bytes leak into next response on keep-alive → smuggled
+After:   Both Content-Length headers dropped. Body read to EOF. Keepalive disabled.</code></pre>
+<p><strong>Proxy keepalive disable</strong> — <code>r-&gt;inconsistent</code> flag no longer cleared on clean upstream close. Separate <code>r-&gt;truncated</code> bit for genuine body truncation.</p>
+<p><strong>Control characters in <code>set_headers</code></strong> — CR, LF, NUL, DEL rejected at config load.</p>
+<pre><code>Before:  &quot;set_headers&quot;: {&quot;X-Injected&quot;: &quot;ok\r\nContent-Length: 0\r\n\r\nHTTP/1.1 200&quot;}
+         → HTTP Response Splitting: attacker injects headers/body
+After:   Config load rejected: control char in header value → safe</code></pre>
+<hr>
+<h3>🔴 Security: IPC &amp; Port Hardening (3 fixes)</h3>
+<p><strong>SCM_CREDENTIALS</strong> — privileged IPC message types authorized by kernel-validated sender PID. Received descriptors closed on every rejected privileged message.</p>
+<p><strong>Control socket peer UID</strong> — requires matching peer UID (root or Unit's own UID). <code>control-user</code>/<code>control-group</code>/<code>control-mode</code> are now defense-in-depth, not a delegation mechanism.</p>
+<p><strong>Port queue bounds</strong> — queue item size capped at slot data bound.</p>
+<hr>
+<h3>🔴 Security: WebSocket RFC 6455 Hardening (5 fixes)</h3>
+<table><thead><tr><th>Fix</th><th>Consequence before</th></tr></thead><tbody><tr><td>Reject truncated extended-length frames</td><td>Frame with 2-byte payload claiming 8-byte extended length → OOB read</td></tr><tr><td>Validate 64-bit extended-length MSB</td><td>RFC 6455: MSB must be 0 → previously ignored</td></tr><tr><td>Fix no-op frame-size decrement</td><td>Could copy bytes beyond declared payload</td></tr><tr><td>Bound Java <code>sendWsFrame</code> JNI arguments</td><td>OOB in Java bridge</td></tr><tr><td>Guard <code>pending_payload_len</code> overflow in Python ASGI</td><td>Integer overflow → OOB</td></tr></tbody></table>
+<hr>
+<h3>🔴 Security: libunit &amp; Language Bounds (4 fixes)</h3>
+<p><strong>Shared memory bounds</strong> — request-header fields region bounded against message size. Serialized pointers validated. Cached header-field indexes validated before use. Shared-memory offsets range-checked: <code>chunk_id</code>, <code>chunk_id+nchunks</code>, <code>sptr</code>.</p>
+<p><strong>App-supplied argument bounds</strong> — across all language bindings:</p>
+<ul><li>PHP: header skip, realpath, PATH_INFO bounds</li><li>Python WSGI + ASGI: argument validation</li><li>Perl: ERRSV scrub</li><li>Java: <code>InputStream.readLine</code> off/len</li><li>WASM: guest offsets</li></ul>
+<p><strong>Response-buffer overflow</strong> — size overflow rejected.</p>
+<p><strong>libunit OOB</strong> — Java <code>InputStream.read()</code> off/len range-checked.</p>
+<hr>
+<h3>🟡 Correctness: Crashes &amp; Leaks (3 fixes)</h3>
+<p><strong>Controller debug-build crash</strong> — active-connection tracking change crashed on control-socket close. Now routes through engine tracking macros.</p>
+<p><strong>Controller fd leak</strong> — accepted control connection fd leaked on init/body allocation failure.</p>
+<p><strong>Buffer-allocation failure</strong> — port read handlers: orderly teardown instead of NULL-pointer dereference. Write error after partial send: immediate error handler routing. Engine teardown: timer batching array freed.</p>
+<hr>
+<h3>🟡 Correctness: Race Conditions (3 fixes)</h3>
+<p><strong>Go port-fd double-close</strong> — <code>getUnixConn()</code> wrapped raw descriptor (which <code>net.FileConn</code> dups). Deferred <code>Close()</code> closed original fd while libunit owned it.</p>
+<pre><code>Before:  fd = 7 (libunit port)
+         dup(7) = 8 → net.FileConn wraps fd 8
+         defer Close(8) → closes fd 7 (alias!) → libunit EBADF
+After:   fd = 7 → dup2(7) = 8 → net.FileConn wraps fd 8
+         libunit remains sole owner of fd 7 → safe</code></pre>
+<p><strong>rootfs automount reload race</strong> — worker mount namespace propagation severed before mounting. Per-worker automount reaped with namespace, not unmounted from host. Config reload no longer races old generation teardown vs new mount.</p>
+<p><strong>Port callback window</strong> — libunit holds port reference across out-of-mutex <code>add_port</code> callback. Concurrent destroy can't free the port mid-callback.</p>
+<hr>
+<h3>🟢 Observability: OpenTelemetry (6 fixes + features)</h3>
+<table><thead><tr><th>Change</th><th>Before</th><th>After</th></tr></thead><tbody><tr><td>Malformed traceparent</td><td>HTTP 500 rejected</td><td>Trace restarted per W3C, header dropped</td></tr><tr><td>Traceparent validation</td><td>None</td><td>Segment lengths, lowercase hex, no all-zero IDs, no <code>ff</code> version</td></tr><tr><td>Duplicate traceparent</td><td>Context lost</td><td>First valid accepted, second dropped</td></tr><tr><td>Injected trace fields</td><td>Garbage flag bits → random header drop</td><td>Zero-initialized</td></tr><tr><td>Sampling decision</td><td>Ratio-based only</td><td>ParentBased: remote parent flags honoured</td></tr><tr><td>Service name</td><td>"NGINX Unit"</td><td>"FreeUnit" (configurable)</td></tr></tbody></table>
+<p><strong>Infrastructure:</strong></p>
+<ul><li>OTLP/gRPC reintroduced (tonic, h2c plaintext, compiled into every <code>--otel</code> build)</li><li>OTLP/HTTP + OTLP/gRPC selectable at runtime</li><li>Batch span processor on dedicated thread (blocking reqwest, no tokio runtime)</li><li>Spec-compliant semconv: <code>http.method</code>, <code>http.status_code</code>, <code>http.route</code>, etc.</li></ul>
+<p><strong>Testing:</strong></p>
+<ul><li><code>fake_otlp</code> mock collector (<code>test/fake_otlp/</code>)</li><li><code>test_otel.py</code> test suite: span export, traceparent propagation, sampling, config validation</li></ul>
+<hr>
+<h3>🟢 Infrastructure &amp; Upgrades (4 changes)</h3>
+<p><strong>Graceful shutdown:</strong></p>
+<ul><li>SIGQUIT: workers drain in-flight requests then exit</li><li>SIGTERM: fast exit, drops workers immediately</li><li>Two-phase listener close: disarm first, release fd after pending accepts drain</li></ul>
+<p><strong>Dependency upgrades:</strong></p>
+<ul><li>wasmtime 35.0.0 → 36.0.12 (closes sandbox-escape CVEs)</li><li>njs → 1.0.0</li><li>OpenTelemetry Rust crates 0.24 → 0.32</li></ul>
+<p><strong>Active connection tracking:</strong></p>
+<ul><li>In-flight connections on dedicated queue (symmetric with idle)</li><li><code>/status</code> API: exact connection accounting on all close paths</li></ul>
+<p><strong>CI &amp; testing:</strong></p>
+<ul><li>C unit-test suite now executed in CI (previously compiled but never run)</li><li>Expanded test coverage: proxy framing, chunked relay, OTel 5xx, Java bounds</li></ul>
+<hr>
+<h3>Numbers</h3>
+<pre><code>Fixes shipped:   38+
+Security fixes:  20 (config injection, path traversal, HTTP smuggling,
+                     WebSocket bounds, IPC auth, libunit bounds)
+Features:         4 (SIGQUIT, 2-phase listener, OTel 0.32+gRPC, traceparent)
+Upgrades:         4 (wasmtime 36, njs 1.0, OTel 0.32, CI tests)
+Correctness:      6 (crashes, leaks, races)
+Misc:             4 (CIDR, PCRE2, fd lifetime, routing)</code></pre>
+<h3>Security Advisories</h3>
+<table><thead><tr><th>GHSA</th><th>Severity</th><th>Scope</th></tr></thead><tbody><tr><td>GHSA-g6v8-r577-76jm</td><td>High</td><td>WebSocket OOB, cross-frame disclosure</td></tr><tr><td>GHSA-768w-qrh2-jjvh</td><td>High</td><td>Control socket peer-auth + NUL injection + cgroup TOCTOU</td></tr></tbody></table>
+<script src="/freeunit-kb/assets/kb.js"></script>
+</body></html>

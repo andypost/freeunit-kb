@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>releases/1.37.1-polish-and-changelog-cleanup</title>
+<link rel="stylesheet" href="/freeunit-kb/assets/kb.css">
+</head><body>
+<nav class="crumbs"><a href="/freeunit-kb/index.html">index</a> / releases/1.37.1-polish-and-changelog-cleanup</nav>
+
+<h1>releases/1.37.1-polish-and-changelog-cleanup</h1>
+
+<h1>FreeUnit 1.37.1 — polish list and the changelog clean-up, drafted</h1>
+<p>_Decision recorded 2026-10-11: no minor cut. The release stays a patch; the content is finished and polished; the <code>CHANGES</code> section is cleaned before the tag. This file is the preparation for that clean-up — nothing here has been written into the repository._</p>
+<h2>0. Where the two changelog files stand</h2>
+<p>Measured on the train tree (<code>rehearse-1371c</code>):</p>
+<ul><li><code>CHANGES</code> — section <code>Changes with FreeUnit 1.37.1</code> at line 2, header still dated <code>04 Oct 2026</code>,</li></ul>
+<p><strong>25 entries</strong> (23 <code>Bugfix:</code> + 2 <code>Change:</code>).</p>
+<ul><li><code>docs/changes.xml</code> — the core element <code>&lt;changes apply="unit" ver="1.37.1" rev="1"&gt;</code> at <strong>line 8</strong></li></ul>
+<p>(prose style: lowercase, no <code>Bugfix:</code> prefix, no issue link, two spaces after a full stop), holding <strong>24</strong> <code>&lt;change&gt;</code> entries. The module block for the same version (line 251) carries only <code>FreeUnit updated to 1.37.1.</code></p>
+<ul><li>The single-entry delta is the <code>off_t</code> / <code>_FILE_OFFSET_BITS</code> fix: 3 hits in <code>CHANGES</code>, 0 in the XML.</li></ul>
+<h2>1. Entries owed — confirmed by keyword, not by guesswork</h2>
+<p>The train's three product PRs fix reported defects but carry no entry, and no entry in the section describes them:</p>
+<table><thead><tr><th>PR</th><th>Issue</th><th>Keyword search in the 1.37.1 section</th><th>Entry</th></tr></thead><tbody><tr><td>#670 router: compress the body part sent with the response headers</td><td>#666</td><td><code>response headers</code> → 0</td><td>owed</td></tr><tr><td>#671 router: publish the engine port before the engine thread starts</td><td>#667</td><td><code>engine port</code> → 0</td><td>owed</td></tr><tr><td>#672 router, libunit: answer a claimed request that is never acknowledged</td><td>#665</td><td><code>claimed</code> → 0</td><td>owed</td></tr></tbody></table>
+<p>(The four <code>WHOAMI</code> hits in the section are <code>main: answer a refused WHOAMI so that the worker exits</code> — an unrelated fix already merged before this train. It does not cover #672.)</p>
+<h3>Draft, <code>CHANGES</code> style</h3>
+<pre><code>    *) Bugfix: when a response body part travelled in the same message as
+       the response fields, the router did not compress it.  libunit puts
+       the first body part into the message that carries the fields when
+       that message has room; with a response buffer over 1024 bytes it ends
+       at a 16 KiB shared memory chunk boundary, so up to 16 KiB of body
+       went to the client uncompressed.  Python WSGI, Python ASGI, Perl and
+       Ruby applications send the fields with the first body write, so they
+       were affected.  The body part is now compressed.  See
+       https://github.com/freeunitorg/freeunit/issues/666.
+
+    *) Bugfix: a request could be parked in an application for ever when a
+       router engine thread was started with a connection already waiting in
+       the listen backlog.  The thread posted the addition of its port to
+       the main thread and started its event loop at once; a connection
+       accepted before that work ran made the application ask for the engine
+       port, and the router answered nothing.  &quot;limits&quot; &quot;timeout&quot; did not
+       end it.  The engine port is now published before the thread starts.
+       See https://github.com/freeunitorg/freeunit/issues/667.
+
+    *) Bugfix: a worker that claimed a request from the shared queue and
+       then failed before it acknowledged the claim left the request
+       unanswered.  The router could not take it back, and the application
+       timeout skipped claimed requests without re-arming, so with the
+       default &quot;timeout&quot; of 0 the client waited for ever.  The router now
+       logs an alert and answers such a request.  See
+       https://github.com/freeunitorg/freeunit/issues/665.</code></pre>
+<h3>Draft, <code>docs/changes.xml</code> style</h3>
+<pre><code class="language-xml">&lt;change type=&quot;bugfix&quot;&gt;
+&lt;para&gt;
+when a response body part travelled in the same message as the response
+fields, the router did not compress it.  libunit puts the first body part
+into the message that carries the fields when that message has room; with a
+response buffer over 1024 bytes it ends at a 16 KiB shared memory chunk
+boundary, so up to 16 KiB of body went to the client uncompressed.  Python
+WSGI, Python ASGI, Perl and Ruby applications send the fields with the first
+body write, so they were affected.  The body part is now compressed.
+&lt;/para&gt;
+&lt;/change&gt;
+
+&lt;change type=&quot;bugfix&quot;&gt;
+&lt;para&gt;
+a request could be parked in an application for ever when a router engine
+thread was started with a connection already waiting in the listen backlog.
+The thread posted the addition of its port to the main thread and started its
+event loop at once; a connection accepted before that work ran made the
+application ask for the engine port, and the router answered nothing.
+&quot;limits&quot; &quot;timeout&quot; did not end it.  The engine port is now published before
+the thread starts.
+&lt;/para&gt;
+&lt;/change&gt;
+
+&lt;change type=&quot;bugfix&quot;&gt;
+&lt;para&gt;
+a worker that claimed a request from the shared queue and then failed before
+it acknowledged the claim left the request unanswered.  The router could not
+take it back, and the application timeout skipped claimed requests without
+re-arming, so with the default &quot;timeout&quot; of 0 the client waited for ever.
+The router now logs an alert and answers such a request.
+&lt;/para&gt;
+&lt;/change&gt;</code></pre>
+<h2>2. The <code>off_t</code> entry in the XML</h2>
+<pre><code class="language-xml">&lt;change type=&quot;bugfix&quot;&gt;
+&lt;para&gt;
+with a 32-bit libc, several source files had a 32-bit off_t and the other
+files had a 64-bit off_t, so a struct with an off_t had different layouts in
+different files.  On Linux, Solaris and HP-UX the files include a system
+header before nxt_unix.h, which sets _FILE_OFFSET_BITS; on QNX nxt_unix.h
+does not set the macro at all.  The &quot;min_length&quot; compression option was
+written as 8 bytes into a 4-byte field, and build or tests crashed.  configure
+now adds -D_FILE_OFFSET_BITS=64 on those four systems, and the build fails
+when off_t does not have the size that configure measured.  musl and 64-bit
+systems were not affected.
+&lt;/para&gt;
+&lt;/change&gt;</code></pre>
+<p>Place it second, to keep the XML's order equal to <code>CHANGES</code>.</p>
+<h2>3. The two <code>Change:</code> entries — wording for a patch-class release</h2>
+<p>Both entries describe work already merged into master, so the text must keep saying what shipped; "cleaning" here means wording that makes clear nothing client-visible breaks, so the section reads as patch-class. Two clauses do that; the classification itself stays the maintainer's call.</p>
+<ol><li><code>--otel</code> no longer needs OpenSSL → add: _The exporter has linked no TLS stack since 1.36.0; this</li></ol>
+<p>only changes what configure requires, and no running configuration is affected._</p>
+<ol><li>TLS failures caused by the client logged at <code>info</code> instead of <code>alert</code> → add: _Only the log level</li></ol>
+<p>changes; the same connections are refused as before, with the same status in the same place._</p>
+<p>If the maintainer prefers a strictly patch-clean section, the alternative is to move both entries to the next minor's section in the same commit that bumps the version — but the code is in master already, so the entry must not disappear silently; it must land in whichever section describes the release that first carries it.</p>
+<h2>4. Parity and release-time checklist</h2>
+<ol><li><code>CHANGES</code> 25 → <strong>28</strong> (three owed entries), XML core element 24 → <strong>28</strong> (same three + <code>off_t</code>).</li></ol>
+<p>Re-run the count check after the edit; do not assume the delta.</p>
+<ol><li>Re-date both section headers and the XML <code>date=</code> — the current <code>04 Oct 2026</code> is the 1.37.0 date.</li><li><code>version</code> → <code>1.37.1</code> / <code>13701</code> (still <code>1.37.0</code> / <code>13700</code> in the tree).</li><li>Re-run the merge-train rehearsal validations (<code>merge_train_rehearsal.py</code>,</li></ol>
+<p><code>changelog_coverage_sweep.py</code>) and the packet's clone check.</p>
+<ol><li>Tag only after the reviewer verdicts (Fable / DeepSeek / Opus) are in and folded.</li></ol>
+<h2>5. Polish list (the "доделываем" part)</h2>
+<table><thead><tr><th>Item</th><th>State</th><th>Note</th></tr></thead><tbody><tr><td>#656 <code>http: log a websocket frame refused …</code></td><td>not taken</td><td>4 lines, observability only; needs one entry in both files</td></tr><tr><td>#646 <code>tests: cover the alert-range default …</code></td><td>not taken</td><td>test-only, +132/−0, no entry</td></tr><tr><td>#657 <code>test: cut the sleeps in three python-leg files</code></td><td>not taken</td><td>test-only, +74/−10, no entry</td></tr><tr><td>#586 size bounds</td><td>held</td><td>needs retarget and the <code>level</code> overlap resolved against #674 before it can be considered</td></tr><tr><td>Review-packet prompts</td><td>to fix</td><td>two DeepSeek models burned the whole budget on reasoning before the structured answer: require <code>VERDICT/WHY/SPOT/RISK/CONFIDENCE</code> <strong>first</strong>, reasoning after</td></tr><tr><td>Milestone 1.37.1</td><td>to re-scope</td><td>23 open / 53 closed is not a 1.37.1 list</td></tr><tr><td>Board rows #11 / #20 / #21</td><td>separate owners</td><td>doc/site work, not release blockers</td></tr></tbody></table>
+<script src="/freeunit-kb/assets/kb.js"></script>
+</body></html>

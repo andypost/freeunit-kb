@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>engineering/port-message-trust-model</title>
+<link rel="stylesheet" href="/freeunit-kb/assets/kb.css">
+</head><body>
+<nav class="crumbs"><a href="/freeunit-kb/index.html">index</a> / engineering/port-message-trust-model</nav>
+
+<h1>engineering/port-message-trust-model</h1>
+<table class="meta"><tr><th>date</th><td>2026-09-17, updated <strong>2026-09-28</strong> · <strong>Status:</strong> read from <code>origin/master</code></td></tr></table>
+<h1>Port-message trust model (why #341 is hardening, not a release blocker)</h1>
+<p><strong>Date:</strong> 2026-09-17, updated <strong>2026-09-28</strong> · <strong>Status:</strong> read from <code>origin/master</code> (tip <code>d4c8558f</code>, 2026-09-28) · <strong>Trigger:</strong> Andrey — "#341 очень сомнительный блокер".</p>
+<h2>UPDATE 2026-09-28 — the fix landed on master (unshipped)</h2>
+<p>The router's sender gate is implemented, in three merged steps plus a follow-up, all after the <code>1.36.1</code> tag (no tag contains them; <code>version</code> still says 1.36.1):</p>
+<ol><li><code>router: accept control messages only from main and the controller</code></li></ol>
+<p>(PR <strong>#506</strong>, merged 2026-09-27) — gates seven control types on the router main port: <code>QUIT</code>, <code>CHANGE_FILE</code>, <code>ACCESS_LOG</code> → main; <code>REMOVE_PID</code> → main or a registered prototype; <code>DATA</code>, <code>APP_RESTART</code>, <code>STATUS</code> → the controller. A refused message gets one alert and its descriptors are closed; no reply is sent, because the sender chooses the reply port and stream. The commit itself states the limit: the gate "makes the attack harder, but does not stop it yet", because <code>NEW_PORT</code> sets <code>rt-&gt;port_by_type[]</code> for the type <em>in the message</em> — an application could announce itself as MAIN and then send <code>QUIT</code>.</p>
+<ol><li><code>router: put the sender gate of the main port in one table</code> — one table</li></ol>
+<p><code>nxt_router_gates[]</code>, every gated type routed through <code>nxt_router_gate_handler()</code></p>
+<ul><li><code>nxt_router_msg_sender_ok()</code>; a type with no row has no sender that passes.</li><li><code>router: check the sender of NEW_PORT, RPC replies and the libunit requests</code> —</li></ul>
+<p>closes the <code>NEW_PORT</code> hole and gates six more types: <code>NEW_PORT</code> (main; a registered prototype only for an application port; an application only for its own application port with stream 0), <code>RPC_READY</code>/<code>RPC_ERROR</code> (<code>NOT_APP</code>), <code>GET_PORT</code> (<code>SELF</code>, and the requested port must be a router port), <code>GET_MMAP</code> (<code>SELF</code>, reply port must be an application port — replaces an <code>nxt_assert()</code>), <code>MMAP</code>/<code>OOSM</code> (<code>SELF</code>). It also fixed a short <code>NEW_PORT</code> body that took its missing bytes from an earlier message in the same buffer.</p>
+<ol><li><code>router: refuse GET_PORT for a foreign pid when the port is not in the hash</code> —</li></ol>
+<p>closes a bypass where an unhashed foreign port id passed the check.</p>
+<p>The router's handler table now points every type at <code>nxt_router_gate_handler</code> except <code>.detached</code>, which keeps <code>nxt_router_detached_handler</code>.</p>
+<p><strong>Still open, stated by the commits themselves:</strong> <code>nxt_port_rpc_handler()</code> does not compare the sender against the peer of the registration, so main, the controller or any prototype can answer any stream of the router (needs a change in the shared RPC code); the router <em>engine</em> ports stay open because their messages can arrive over the shared-memory queue, which carries no pid; <code>DETACHED</code> is not gated; on platforms without sender credentials the check falls back to the pid in the header, so it is weaker there; and the dispatcher-level per-type ACL in the <code>TODO(audit-V5-medium)</code> block of <code>src/nxt_port.c</code> is still not done (blocked on process-registration ordering — dispatch can run before a prototype has registered a child).</p>
+<p><strong>Issue hygiene:</strong> #341 itself is untouched — open, zero comments, last updated 2026-09-13, and no PR is linked to it. It should be closed (or annotated) when the next release actually ships the series; until then, shipping behaviour is still 1.36.1, so the public wording must say "gated on master, unshipped".</p>
+<h2>The mechanism was real (as read 2026-09-17, before the fix)</h2>
+<ul><li>The router dispatches port messages on the sender-chosen type byte:</li></ul>
+<p><code>nxt_port_handler()</code> takes <code>handlers = msg-&gt;port-&gt;data</code> and calls <code>handlers[msg-&gt;port_msg.type]</code>, with no sender check of its own.</p>
+<ul><li>The router's own table (<code>nxt_router_process_port_handlers</code>) is ungated: <code>quit</code>,</li></ul>
+<p><code>rpc_ready</code>/<code>rpc_error</code>, <code>app_restart</code>, <code>status</code>, <code>remove_pid</code>, <code>access_log</code>, <code>new_port</code>, <code>get_port</code>, <code>change_file</code>, <code>mmap</code>, <code>get_mmap</code>, <code>data</code>, <code>oosm</code>.</p>
+<ul><li>An application worker holds the write end of the router's main port</li></ul>
+<p>(<code>router_port-&gt;pair[1]</code> handed to the worker in <code>nxt_application.c</code>), so it can <code>sendmsg()</code> any type directly instead of going through libunit.</p>
+<h2>Why it is a weak RELEASE blocker</h2>
+<ol><li><strong>Not a regression.</strong> The gap predates this cycle; nothing in the 1.37.0 delta</li></ol>
+<p>creates or widens it. A release gate exists to catch what the cycle changes.</p>
+<ol><li><strong>Reachability needs code execution inside an application worker.</strong> In Unit's</li></ol>
+<p>own trust model the application <em>is</em> the operator's code, and the isolation feature is containment of that application, not authentication of the router against it. For a single-owner deployment it is not an escalation past "the application is compromised".</p>
+<ol><li><strong>The tree already carries the plan and the partial fix.</strong> <code>src/nxt_port.c</code></li></ol>
+<p>documents it as <code>TODO(audit-V5-medium)</code>: sender-type ACL for privileged port messages, gated handler-by-handler on <code>nxt_recv_msg_cmsg_pid()</code>. Already gated: main's <code>PROCESS_CREATED</code>/<code>START_PROCESS</code>/<code>PROCESS_READY</code>, the prototype's equivalents, and the cert/script/socket/access-log handlers. What is left is the router's table plus the generic dispatcher ACL.</p>
+<ol><li><strong>The earlier ACL draft was reverted for a concrete reason</strong>, not by neglect:</li></ol>
+<p>the kernel-validated sender pid was not available on the existing socketpair. That blocker is gone (<code>nxt_socketpair_create()</code> now sets <code>SO_PASSCRED</code>), and what remains is a design question — the ACL cannot require an already-registered sender, because dispatch can run before the prototype has registered a child. So the right next step is a decision, not another patch.</p>
+<ol><li><strong>One severity claim in the issue is overstated.</strong> <code>#341</code> says a forged <code>QUIT</code></li></ol>
+<p>"ends service for every application behind that router — instant, not gradual". The router declares <code>.restart = 1</code>, so main re-forks it immediately and without backoff: the result is one router-wide teardown — every application and connection behind that router drops, the sender included — not a permanent kill. A sustained loop is self-limiting, though other types (<code>status</code>, <code>app_restart</code>, <code>remove_pid</code>, <code>access_log</code>) do not kill the sender.</p>
+<ol><li><strong>Platform note:</strong> on macOS, NetBSD, OpenBSD and illumos there is neither</li></ol>
+<p><code>SCM_CREDENTIALS</code> nor <code>SCM_CREDS</code>, so those platforms stay unauthenticated by construction — relevant only if a non-Linux deployment is in scope.</p>
+<h2>Why it is NOT a dubious CLAIM limiter</h2>
+<p>Two consequences sit exactly on the multi-tenant / isolation story:</p>
+<ul><li><code>QUIT</code> → one compromised application worker drops <strong>every</strong> site behind that</li></ul>
+<p>router (cross-tenant availability).</p>
+<ul><li><code>rpc_ready</code>/<code>rpc_error</code> → <code>nxt_port_rpc_handler</code> accepts an application-supplied</li></ul>
+<p>descriptor, and the TLS path would adopt it as a chain file. That is a cross-boundary descriptor, not merely a DoS.</p>
+<h2>Wording to use publicly</h2>
+<p>Not "applications can send unauthenticated port messages" (sounds like a remote hole), but: <strong>sender validation on the router's port table is not done yet; it requires an already-compromised application worker, and isolation is containment of an application, not protection against one.</strong> Class: hardening / defense-in-depth, tracked, with the design step named.</p>
+<h2>Related</h2>
+<ul><li><code>releases/1.37.0-in-flight-classification.md</code> — the actual pre-tag checklist.</li></ul>
+<script src="/freeunit-kb/assets/kb.js"></script>
+</body></html>

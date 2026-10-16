@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TLS as a loadable module — 1.38 scope, gates and checklist</title>
+<link rel="stylesheet" href="/freeunit-kb/assets/kb.css">
+</head><body>
+<nav class="crumbs"><a href="/freeunit-kb/index.html">index</a> / engineering/tls-module-1.38-scope</nav>
+<p class="banner warn">plan</p>
+<h1>TLS as a loadable module — 1.38 scope, gates and checklist</h1>
+<table class="meta"><tr><th>description</th><td>The minimal TLS-module slice for 1.38 (core abstraction + loadable module + OpenSSL backend + ALPN owned by the module), its gates and ordering against the h2 stack, what is out of scope (reload, BoringSSL/rustls, isolation), and an actionable checklist.</td></tr><tr><th>tags</th><td>freeunit, tls, module, refactor, 1.38, checklist, roadmap</td></tr><tr><th>updated</th><td>2026-10-15</td></tr><tr><th>resources</th><td>https://github.com/freeunitorg/freeunit-exp/pull/23, https://github.com/freeunitorg/freeunit-exp/pull/28, https://github.com/freeunitorg/freeunit-exp/pull/31</td></tr></table>
+<h1>TLS as a loadable module — 1.38 scope, gates, checklist</h1>
+<p><strong>Created 2026-10-13 by SOUL.</strong> Window: milestone <strong>1.38</strong>, due <strong>2027-01-29</strong> (14 open). Evidence: workbench prototypes <code>freeunit-exp</code> <strong>#23</strong> (loadable TLS backend interface, OpenSSL backend, ALPN smoke green), <strong>#28</strong> (connection entry through the backend table), <strong>#30/#31</strong> (kTLS prototype + measurement); KB <code>tls-abstraction-ktls</code> (variant A ≈ <strong>2–3 weeks</strong>), <code>tls-module-prototype</code> (W1).</p>
+<h2>Verdict (scope)</h2>
+<p>Ship in 1.38 the <strong>thin-kernel slice</strong>: core↔TLS abstraction + a <strong>loadable TLS module</strong> + <strong>OpenSSL as the first backend</strong> + <strong>ALPN owned by the module</strong>. Everything else (zero-downtime reload, BoringSSL/rustls backends, security isolation) is <strong>1.39+</strong>.</p>
+<h2>In scope (1.38)</h2>
+<ul><li>Core↔TLS abstraction wired into <code>unitd</code> (loader), OpenSSL as the in-tree backend.</li><li>ALPN (select callback + <code>conn_alpn_h2</code>) owned by the module, not the core.</li><li>The module built in the default build (no separate package required to work).</li></ul>
+<h2>Out of scope (1.39+)</h2>
+<ul><li>Zero-downtime reload (TLS config/listener lifetime — separate design).</li><li>Extra backends: BoringSSL, <strong>rustls</strong> (Rust crypto into a C core — toolchain</li></ul>
+<p>dependency + threading model).</p>
+<ul><li>Security isolation / "core sans TLS data path" — the core keeps <code>nxt_conn_io</code>.</li><li>kTLS as a shipping feature (prototype only; orthogonal data-path track).</li></ul>
+<h2>Gates / ordering</h2>
+<ol><li><strong>ALPN ownership</strong> — gates the "thin core" claim. ALPN lives in</li></ol>
+<p><code>nxt_openssl.c</code> today (h2 PR #463). Move it behind the module interface, or the core keeps its TLS dependency after the module lands.</p>
+<ol><li><strong>h2 sequencing</strong> — the module interface and h2 stage 1 must land in a</li></ol>
+<p>compatible order (interface first, or h2's ALPN written against the module seam).</p>
+<ol><li><strong>Interface versioning</strong> — freeze the prototype's <code>nxt_tls_backend()</code> + version</li></ol>
+<p>check the loader validates against.</p>
+<ol><li><strong>Cert-reload ownership</strong> — core or module (open) — decide before wiring the loader.</li><li><strong>Load model</strong> — runtime <code>dlopen</code> with a built-in fallback vs a fixed module path</li></ol>
+<p>chosen at configure time (open).</p>
+<ol><li><strong>TLS 1.3 no-overlap</strong> — must answer <code>NOACK</code> → HTTP/1 on no overlap (open;</li></ol>
+<p>the prototype pins 1.2).</p>
+<ol><li><strong>Health/status</strong> — module health to <code>/status</code> + the error log.</li></ol>
+<h2>Checklist</h2>
+<ul><li>[ ] Freeze the module interface (header + version) from the W1 prototype (#23)</li><li>[ ] Decide the load model (<code>dlopen</code> + built-in fallback vs fixed path)</li><li>[ ] Decide cert-reload ownership (core vs module)</li><li>[ ] Route the connection entry through the backend table (#28) and land it on master</li><li>[ ] Move ALPN select cb + <code>conn_alpn_h2</code> behind the module interface</li><li>[ ] Keep OpenSSL the in-tree first backend; build the module in the default build</li><li>[ ] Resolve TLS 1.3 no-overlap (<code>NOACK</code> → HTTP/1) + test</li><li>[ ] Module health → <code>/status</code> + error log</li><li>[ ] Rebase h2 stage 1 onto the new ALPN seam (coordinate with <code>#463</code>)</li><li>[ ] CI/smoke: ALPN cases (none / <code>http/1.1</code> / <code>h2</code>) green in the <strong>product</strong> build</li><li>[ ] Docs: module interface + how to build/choose a TLS backend</li><li>[ ] Do-not-claim audit for the 1.38 notes (see below)</li></ul>
+<h2>Effort</h2>
+<p>~<strong>2–3 weeks</strong> of focused work (KB variant-A estimate) <strong>plus</strong> the ALPN/h2 coordination. It competes for the same 1.38 window as h2, schedules (#452), USDT (#451), status socket, PCRE2 JIT, TLS 1.3/k8s — resource it explicitly, do not assume.</p>
+<h2>Do not claim for 1.38</h2>
+<ul><li>"pluggable crypto backends" — only OpenSSL ships.</li><li>"reload TLS without restart".</li><li>"TLS removed from the core" — the core keeps the <code>nxt_conn_io</code> data path.</li></ul>
+<h2>Verification</h2>
+<ul><li>Product build exposes the module loader; ALPN smoke (none / http1.1 / h2) passes</li></ul>
+<p>in CI on the default build.</p>
+<ul><li>No <code>SSL_*</code>/<code>X509_*</code> call outside the backend module; the core reaches TLS only</li></ul>
+<p>through the interface.</p>
+<hr>
+<h2>2026-10-15 — adopter demand signal: SNUnit (Scala Native)</h2>
+<p><strong>Source:</strong> lolgab (author of SNUnit, <code>lolgab/snunit</code>), posted the ask in the FreeUnit channel and filed <code>freeunitorg/freeunit#650</code> (2026-10-09). andypost replied points at <code>docs.freeunit.org/howto/certbot/</code> and PR <strong>#452</strong> (<code>schedules</code>, the renewal trigger) for 1.38.</p>
+<p><strong>The ask, split into its two real parts — they have different readiness:</strong></p>
+<ol><li><strong>"More of the HTTP stack so it runs without a reverse proxy."</strong> This is</li></ol>
+<p><strong>browser-facing HTTP/2</strong> (and, later, H3). The stack already exists on the fork: PRs #458/#459 (phase 0) → #463 (stage 1, nghttp2 over TLS/ALPN) → #467 (stage 2), opt-in <code>--h2</code>, 46 tests, ASan clean. It is <strong>sequenced LAST</strong> in the #438–#469 wave, behind the UAF/lifetime fixes (#414/#415, #425, #464/#465) and the hardening stack (#444→#448, #468) — landing it above an unfixed UAF multiplies the blast radius (more concurrent streams per connection). H2 at h1-parity body handling is a valid MVP; <strong>D3 body streaming is a follow-on, not a prerequisite</strong> (it keeps the upload HOL caveat, identical to h1 today).</p>
+<ol><li><strong>"Automatic Let's Encrypt like Caddy."</strong> Native ACME, config-driven, HTTP-01</li></ol>
+<p>served by the router, persisted account key, auto-renewal with hot-swap. Two readiness tiers (see <code>acme-tls-plan</code>, <code>acme-certbot-thin-layer</code>):</p>
+<ul><li><strong>Ships now, no core code:</strong> the certbot <strong>thin layer</strong> — one HTTP-01 route</li></ul>
+<p>(<code>/.well-known/acme-challenge/*</code>) + a deploy-hook that <code>PUT</code>s the bundle to the Control API. Both halves tested live on 1.36.1. This is the honest answer to "HTTPS today" until the native path exists.</p>
+<ul><li><strong>Native in-daemon shim:</strong> needs a TLS <strong>client</strong> (to talk to the ACME server) +</li></ul>
+<p>minimal HTTP client + resolver — i.e. the same <strong>X11 hub</strong> the control-socket SERVER side (D7) routes through. Renewal needs a <strong>scheduler</strong> (#452 / X10). http-01 and tls-alpn-01 need no DNS providers, so this stays <strong>Rust/C in the daemon</strong>; wildcards (dns-01) are a <strong>Go/lego sidecar</strong>, never in unitd.</p>
+<p><strong>Why this is a hub event, not a new work item.</strong> Both halves of the ask converge on <strong>one node — the modular-TLS hub (X11)</strong>:</p>
+<ul><li>H2 needs <strong>ALPN</strong>, which lives in <code>nxt_openssl.c</code> today (#463). Gate #1 of this</li></ul>
+<p>scope doc is "ALPN ownership": if ALPN is not moved behind the module seam, the core keeps its TLS dependency after the module lands. A browser-facing H2 adopter therefore <em>pulls on the hub from one side</em>.</p>
+<ul><li>ACME needs a TLS <strong>client</strong> — the <em>other</em> side of the same module interface (server</li></ul>
+<p>side = D7 control auth; client side = ACME). Plus the scheduler (#452) for renewal.</p>
+<p>So "prioritize TLS" is not "add features"; it is <strong>"land the hub (X11) that ACME-client, control-API-server and the H2 ALPN seam all route through, in this order."</strong> The adopter supplies the missing <em>demand</em> justification the roadmap row lacked.</p>
+<p><strong>The embedding detail.</strong> SNUnit embeds <code>unitd</code> inside the Scala app (single executable, generated config, observability stack on unitd). That is a distinct integration shape (app-embeds-daemon), not P4/persistent-worker — noted, not addressed here.</p>
+<p><strong>Verdict (hypothesis, maintainer's call):</strong></p>
+<ul><li>The request creates <strong>no new work</strong>; it validates the existing sequence and raises</li></ul>
+<p>confidence in the hub. Recommended order after 1.37.1: <strong>H2 wave first (it is built and gated only by the UAF/hardening work), then the TLS hub (X11), with ACME-client and D7 as its two consumers.</strong> The certbot thin layer answers #650 immediately with zero core change and should be <em>documented</em> as the interim, not sold as the fix.</p>
+<ul><li><strong>Do not</strong> let the adopter's "no reverse proxy" push H3 into the same breath: H3 is a</li></ul>
+<p>separate transport (UDP/QUIC), gated on TLS 1.3 in the module + D3 + a UDP event path; it does not ride the H2 stack.</p>
+<p><strong>Do not claim:</strong> native ACME shipped; H2 default-on; "no reverse proxy needed" (H3 absent); any product number.</p>
+<script src="/freeunit-kb/assets/kb.js"></script>
+</body></html>

@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>engineering/zen-review-pr-276</title>
+<link rel="stylesheet" href="/freeunit-kb/assets/kb.css">
+</head><body>
+<nav class="crumbs"><a href="/freeunit-kb/index.html">index</a> / engineering/zen-review-pr-276</nav>
+
+<h1>engineering/zen-review-pr-276</h1>
+
+<h1>zen-review PR #276 — router: close listening socket before ack removal</h1>
+<p>_2026-09-05. Verified merge review of freeunitorg/freeunit#276. Snapshot of version, logic, and the honest limitation left behind._</p>
+<h2>Fate</h2>
+<ul><li><strong>MERGED</strong> 2026-09-05 20:35 UTC (state=closed, merged=true).</li><li><code>src/nxt_router.c</code> +48/−20, 1 file. Branch <code>fix/listen-close-ack-order</code> → master.</li><li>Commit <code>94553347</code> is top of origin/master (verified locally + API).</li><li>Co-Authored-By: Claude Opus 5. Codex auto-review: "no major issues".</li></ul>
+<h2>What it fixes / logic</h2>
+<p>Title: "close the listening socket before acknowledging its removal".</p>
+<p><strong>Before (bug):</strong> <code>nxt_router_listen_socket_close_ready()</code> — the config confirmation — ran right after <code>accept(2)</code> was disarmed, BEFORE the FD was actually closed. That reported success ("port free") while the socket was still bound → a config re-adding the same address hit <code>EADDRINUSE</code> at bind time.</p>
+<p><strong>Now (two-phase, split by in-flight):</strong></p>
+<ul><li><code>lev-&gt;count &gt; 1</code> (connections in flight) → ack in <strong>phase 1</strong> (early), because</li></ul>
+<p>drain timing is unpredictable and the config must not wait for idle clients.</p>
+<ul><li><code>lev-&gt;count == 1</code> (nothing in flight) → ack in <strong>phase 2</strong>, strictly AFTER</li></ul>
+<p><code>nxt_router_listen_socket_release()</code> (the actual close). <code>close_ready()</code> moved from before to after the release in <code>close_finish()</code>.</p>
+<p><strong>Semantics:</strong> "port free" now honestly means "FD closed" for empty listeners, and "drain started" for busy ones — not two readings of one cut.</p>
+<h2>Verdict</h2>
+<ul><li>✅ Logic correct: ack after close; two-phase split by in-flight; <code>close_ready</code></li></ul>
+<p>in the right branch (phase1 when draining, phase2 after release).</p>
+<ul><li>✅ Documented: the new comment states WHY the order (ack after release).</li><li>✅ Removal contract preserved for empty listeners (succ. reconfig = port free).</li><li>⚠️ <strong>Known limitation (honest, NOT hidden):</strong> for BUSY listeners the FD stays</li></ul>
+<p>bound until drain finishes → re-adding the same address can <code>EADDRINUSE</code> (retryable). Author flagged as follow-up ("full-drain follow-up"), did NOT close it as solved. This is the <code>ls-&gt;count</code>/<code>nxt_process_quit()</code> contract — not a bug of this PR.</p>
+<h2>Notes</h2>
+<ul><li><code>test_listeners_port_release</code> referenced in the comment.</li><li>Related: zen-review-pr-254.md (capget keep-running), zen-review-commit-7311ab.md.</li></ul>
+<script src="/freeunit-kb/assets/kb.js"></script>
+</body></html>

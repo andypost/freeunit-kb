@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FreeUnit v2 PoC - Architecture</title>
+<link rel="stylesheet" href="/freeunit-kb/assets/kb.css">
+</head><body>
+<nav class="crumbs"><a href="/freeunit-kb/index.html">index</a> / v2/architecture</nav>
+<p class="banner warn">PoC complete (2026-06-15)</p>
+<h1>FreeUnit v2 PoC - Architecture</h1>
+<table class="meta"><tr><th>description</th><td>Rust orchestrator + persistent NTS PHP worker pool</td></tr><tr><th>tags</th><td>freeunit, v2, rust, php, nts, poc, revolt, ipc, uds</td></tr></table>
+<h1>FreeUnit v2 Architecture</h1>
+<h2>High-level</h2>
+<p>``' +-------------+     UDS (binary framing)     +--------------+</p>
+<p>| Rust Master +-----------------------------&gt;+ PHP Worker 1 |</p>
+<p>| (tokio)     |&lt;-----------------------------+ (NTS, Revolt)|</p>
+<p>|             |     SCM_RIGHTS / pipes       +--------------+</p>
+<p>| - epoll     |                              | PHP Worker 2 |</p>
+<p>| - TLS       |                              +--------------+</p>
+<p>| - routing   |                              | ...          |</p>
+<p>| - lifecycle |                              +--------------+</p>
+<p>| - liveness  |</p>
+<p>+-------------+ ``'</p>
+<h2>IPC Layer</h2>
+<ul><li>Unix Domain Sockets (UDS) with binary framing (length-prefix)</li><li>Large payloads: SCM_RIGHTS (fd passing) or pipes</li><li>MAX_FRAME_LEN protection against OOM</li><li>recv_fd rejects MSG_CTRUNC (fd-confusion protection)</li><li>Partial send: retry loop on writability</li></ul>
+<h2>Liveness Monitor (section 4)</h2>
+<p>Three-phase mechanism distinguishing hung from slow:</p>
+<ol><li><strong>Polling</strong> (every 100ms): /proc/&lt;pid&gt;/task/&lt;pid&gt;/stat - CPU-time thread group leader</li><li><strong>Suspicion</strong>: CPU-time not growing 200ms + state S/D + request_active=1</li><li><strong>Verification</strong>: PING_LIVENESS via UDS, PONG_LIVENESS in 50ms</li></ol>
+<h2>TGID invariant</h2>
+<p>PID from Command::spawn() == TID of thread group leader. Worker runs on TGID. No background threads.</p>
+<h2>Backpressure</h2>
+<ul><li>tokio::sync::Semaphore (30 permits/worker)</li><li>Power of Two Choices load balancing</li><li>Both busy -&gt; 503</li></ul>
+<h2>Graceful Crash Recovery</h2>
+<ul><li>pidfd detects UDS break/process death</li><li>Log, cleanup, respawn, 502</li></ul>
+<script src="/freeunit-kb/assets/kb.js"></script>
+</body></html>

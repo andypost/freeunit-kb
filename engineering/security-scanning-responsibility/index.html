@@ -1,0 +1,118 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>engineering/security-scanning-responsibility</title>
+<link rel="stylesheet" href="/freeunit-kb/assets/kb.css">
+</head><body>
+<nav class="crumbs"><a href="/freeunit-kb/index.html">index</a> / engineering/security-scanning-responsibility</nav>
+
+<h1>engineering/security-scanning-responsibility</h1>
+<table class="meta"><tr><th>answer</th><td>Both — but the boundary matters.</td></tr></table>
+<h1>Security Scanning: Who Is Responsible For What</h1>
+<h2>The Question</h2>
+<p>Does FreeUnit need to scan Go/Rust/PHP dependencies for CVEs, or is that the distribution's job?</p>
+<p><strong>Answer:</strong> Both — but the boundary matters.</p>
+<hr>
+<h2>Layer Model</h2>
+<pre><code>                    CVE Ownership
+┌─────────────────────────────────────┐
+│ User&#x27;s PHP code / WordPress/Drupal  │ ← USER (not FreeUnit&#x27;s problem)
+├─────────────────────────────────────┤
+│ PHP interpreter (libphp)            │ ← DISTRO (Debian security tracks PHP CVEs)
+├─────────────────────────────────────┤
+│ System libraries (OpenSSL, libc,     │ ← DISTRO (Debian security team)
+│  PCRE2, libxml2, zlib, curl, etc.)  │
+├─────────────────────────────────────┤
+│ FreeUnit C core                      │ ← FREEUNIT (our code, our bugs)
+├─────────────────────────────────────┤
+│ Rust crates (OTel, unitctl, wasm,   │ ← FREEUNIT (we vendor/bundle them)
+│  fake_upstream, fake_otlp, eol)     │
+├─────────────────────────────────────┤
+│ Bundled contribs (wasmtime, njs)     │ ← FREEUNIT (we ship the tarballs)
+├─────────────────────────────────────┤
+│ Docker base image (Debian Trixie)   │ ← FREEUNIT (we publish the image)
+└─────────────────────────────────────┘</code></pre>
+<hr>
+<h2>What The Distribution Covers</h2>
+<p>When you <code>apt install freeunit</code> on Debian Trixie:</p>
+<table><thead><tr><th>Dependency</th><th>Who tracks CVEs</th><th>FreeUnit needs to do?</th></tr></thead><tbody><tr><td>OpenSSL</td><td>Debian security</td><td>Nothing — apt upgrade pulls fix</td></tr><tr><td>PCRE2</td><td>Debian security</td><td>Nothing</td></tr><tr><td>libxml2</td><td>Debian security</td><td>Nothing</td></tr><tr><td>zlib</td><td>Debian security</td><td>Nothing</td></tr><tr><td>PHP (libphp-embed)</td><td>Debian security + sury.org</td><td>Nothing — php upgrade handles it</td></tr><tr><td>glibc</td><td>Debian security</td><td>Nothing</td></tr><tr><td>curl, libcurl</td><td>Debian security</td><td>Nothing</td></tr></tbody></table>
+<p><strong>The distro handles everything in <code>apt install freeunit</code>.</strong></p>
+<hr>
+<h2>What FreeUnit Must Cover</h2>
+<h3>1. Bundled Rust crates (our Cargo.tomls)</h3>
+<p>We ship these binaries in our Docker images:</p>
+<ul><li><code>unitctl</code> (CLI tool)</li><li><code>fake_upstream</code>, <code>fake_otlp</code>, <code>eol</code> (testing tools, not in production)</li><li><code>wasm-wasi-component</code> (WASM runtime)</li></ul>
+<p>These are compiled FROM source during <code>./configure --otel</code> build. The distro does NOT ship them (they're not in Debian repos). <strong>FreeUnit is responsible.</strong></p>
+<p><strong>Solution:</strong> <code>cargo audit</code> in CI. Simple, one command:</p>
+<pre><code class="language-yaml">- name: cargo audit
+  run: cargo install cargo-audit &amp;&amp; cargo audit
+  working-directory: src/otel</code></pre>
+<p>Runs against the Rust Advisory Database (RUSTSEC) — same as GitHub dependabot would do for Cargo.toml.</p>
+<h3>2. Bundled contrib tarballs (wasmtime, njs)</h3>
+<p>We download these as tarballs and ship in Docker images:</p>
+<pre><code>https://packages.freeunit.org/wasmtime-36.0.12.tar.gz
+https://packages.freeunit.org/njs-1.0.0.tar.gz</code></pre>
+<p>No package manager tracks their CVEs. <strong>FreeUnit is responsible.</strong></p>
+<p><strong>Solution:</strong> Manual tracking (what we do now — we know when wasmtime CVE drops and bump to 36.0.12). Could be automated with a weekly cron that checks:</p>
+<ul><li><code>gh release view wasmtime/wasmtime --json body</code> and greps for "security"</li><li>Or subscribes to their security advisories</li></ul>
+<h3>3. Docker images (we publish)</h3>
+<p>Our GHCR images bundle all of the above. A CVE in wasmtime or a Rust crate means our Docker image is vulnerable until we rebuild.</p>
+<p><strong>Solution:</strong> <code>trivy</code> or <code>docker scout</code> scan on release:</p>
+<pre><code class="language-bash">trivy image ghcr.io/freeunitorg/freeunit:latest-php-8.5</code></pre>
+<p>This catches everything — system libraries AND our bundled code.</p>
+<hr>
+<h2>What The User Covers</h2>
+<ul><li>PHP code vulnerabilities (SQLi, XSS, RCE in their app) — not FreeUnit's problem</li><li>WordPress/Drupal plugin CVEs — user updates plugins</li><li>config mistakes (exposed control socket, weak isolation) — FreeUnit can warn but can't enforce</li></ul>
+<hr>
+<h2>Three-Tier Recommendation</h2>
+<h3>Tier 1: CI gate (every PR, free)</h3>
+<pre><code class="language-yaml"># Add to dependabot.yml
+updates:
+  - package-ecosystem: cargo
+    directory: &quot;/src/otel&quot;
+    schedule:
+      interval: weekly
+  - package-ecosystem: cargo
+    directory: &quot;/tools/unitctl&quot;
+    schedule:
+      interval: weekly
+  - package-ecosystem: gomod
+    directory: &quot;/go&quot;
+    schedule:
+      interval: weekly
+  - package-ecosystem: docker
+    directory: &quot;/pkg/docker&quot;
+    schedule:
+      interval: weekly</code></pre>
+<p>GitHub does this for free. No tokens, no infra. Opens PRs automatically when a dependency has a known CVE.</p>
+<p>Also add to CI:</p>
+<pre><code class="language-yaml">- uses: rustsec/audit-check@v2
+  with:
+    token: ${{ secrets.GITHUB_TOKEN }}</code></pre>
+<h3>Tier 2: Release gate (every release, automated)</h3>
+<pre><code class="language-bash"># Before tagging:
+trivy image ghcr.io/freeunitorg/freeunit:latest-php-8.5
+cargo audit
+# If critical CVE → block release</code></pre>
+<h3>Tier 3: Proactive monitoring (weekly, my job)</h3>
+<p>I can run a weekly cron that:</p>
+<ol><li>Checks <code>cargo audit</code> on all Cargo.tomls</li><li>Checks wasmtime releases for security advisories</li><li>Checks njs releases for security fixes</li><li>Reports: "OK" or "UPDATE NEEDED: wasmtime 36.0.x -&gt; 37.0.0 (CVE-XXXX)"</li></ol>
+<hr>
+<h2>What Actually Matters For FreeUnit</h2>
+<table><thead><tr><th>Threat</th><th>Likelihood</th><th>Impact</th><th>FreeUnit action</th></tr></thead><tbody><tr><td>CVE in OpenSSL (system)</td><td>High</td><td>Critical</td><td>Nothing — distro patches</td></tr><tr><td>CVE in tokio (Rust crate)</td><td>Low</td><td>High</td><td><code>cargo audit</code> catches it</td></tr><tr><td>CVE in wasmtime (contrib)</td><td>Low</td><td>Critical (sandbox escape)</td><td>Manual monitor (1.36.0 already updated)</td></tr><tr><td>CVE in PHP interpreter</td><td>Medium</td><td>High</td><td>sury.org patches, we rebuild Docker</td></tr><tr><td>CVE in FreeUnit C code</td><td>Low</td><td>Critical</td><td>We fix it — security audit proved we can</td></tr></tbody></table>
+<p><strong>Biggest gap today:</strong> No <code>cargo audit</code> in CI. Rust crates (OTel, unitctl) could have a known RUSTSEC and we'd never know until someone notices.</p>
+<p><strong>Second gap:</strong> No Docker image scanning. We publish images with bundled wasmtime/njs — if a wasmtime CVE drops between releases, our images are vulnerable and nobody scans them.</p>
+<p><strong>Both are cheap to fix.</strong> Dependabot for Cargo + Go is zero-config. Trivy scan is one CI step.</p>
+<hr>
+<h2>2026-09-16 Update — which of these gaps have since closed</h2>
+<p>Verified on <code>origin/master</code> <code>df9843b0</code> (2026-09-15). Full inventory: <code>engineering/dependency-ci-hygiene.md</code>.</p>
+<ul><li><strong>CLOSED (cargo audit).</strong> <code>.github/workflows/audit.yml</code> (PR #399, merged</li></ul>
+<p>2026-09-15) audits EVERY tracked <code>Cargo.lock</code> with <code>cargo audit --deny warnings</code>, one matrix leg per lock, on lock/toml change, push to master and a weekly cron. The "Biggest gap today: No <code>cargo audit</code> in CI" claim above is historical — the Rust crates named in the layer model are now covered.</p>
+<ul><li><strong>CLOSED (fuzzing shape).</strong> The OSS-Fuzz cifuzz workflow is gone from master;</li></ul>
+<p><code>fuzzing.yml</code> now runs in-tree libFuzzer targets as a PR gate on the HTTP parser / config / UTF-8 / controller paths. Two new gates also exist: <code>security-syscalls.yml</code> (syscall drift) and <code>eol-check.yml</code> (EOL policy from <code>pkg/eol.json</code>).</p>
+<ul><li><strong>PARTLY CLOSED (bundled contribs).</strong> <code>pkg/eol.json</code> now documents each</li></ul>
+<p>dependency's floor, declared-by, tested ceiling and source, including both wasmtime pins. The C-API pin (43.0.1) is still "audited by nothing" and is hit by RUSTSEC-2026-0269 / RUSTSEC-2026-0222 — open as freeunit#400.</p>
+<ul><li><strong>STILL OPEN.</strong> dependabot covers <code>github-actions</code> only (the cargo / gomod /</li></ul>
+<p>docker block in Tier 1 above is still unapplied); PR #99 (Trivy filesystem audit) has been open since 2026-07-07 with no decision, so the Docker-image scan in Tier 2 is still manual.</p>
+<script src="/freeunit-kb/assets/kb.js"></script>
+</body></html>

@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>engineering/freeunit-1361-rootless-live-test</title>
+<link rel="stylesheet" href="/freeunit-kb/assets/kb.css">
+</head><body>
+<nav class="crumbs"><a href="/freeunit-kb/index.html">index</a> / engineering/freeunit-1361-rootless-live-test</nav>
+
+<h1>engineering/freeunit-1361-rootless-live-test</h1>
+<table class="meta"><tr><th>date</th><td>2026-09-11 · <strong>Status:</strong> DONE — unitd 1.36.1 + Python + PHP all serving live</td></tr></table>
+<h1>FreeUnit 1.36.1 — rootless live test (Alpine, no root)</h1>
+<p><strong>Date:</strong> 2026-09-11 · <strong>Status:</strong> DONE — unitd 1.36.1 + Python + PHP all serving live requests on a non-root Alpine box.</p>
+<h2>What was proven</h2>
+<p>Ran the <strong>published</strong> <code>freeunit 1.36.1</code> (Alpine edge/community) <strong>without root</strong> and served real HTTP through all four paths:</p>
+<table><thead><tr><th>#</th><th>App</th><th>Port</th><th>Result</th></tr></thead><tbody><tr><td>1</td><td>Python <strong>WSGI</strong></td><td>8801</td><td><code>hello from Unit wsgi.py</code> (py 3.14.7)</td></tr><tr><td>2</td><td>Python <strong>ASGI</strong></td><td>8802</td><td><code>hello asgi</code></td></tr><tr><td>3</td><td><strong>X10 job-shim</strong> (<code>job_asgi.py</code>)</td><td>8803</td><td><code>{"job":"running"}</code> + supervised child restarts</td></tr><tr><td>4</td><td><strong>PHP</strong> 8.4.25</td><td>8804</td><td><code>hello from Unit PHP</code>, <code>sapi=cli-server</code></td></tr></tbody></table>
+<p>Modules reported by <code>/status</code>: <code>python 3.14.7</code>, <code>php 8.4.25</code>.</p>
+<h2>Packages used (all rootless, extracted to a user prefix)</h2>
+<ul><li><code>freeunit-1.36.1-r0</code>, <code>freeunit-python3</code>, <code>freeunit-php84</code>, <code>freeunit-tools</code></li></ul>
+<p>(edge/community) — <code>unitd</code>, <code>python3.unit.so</code>, <code>php84.unit.so</code>, <code>unitc</code>.</p>
+<ul><li>Deps pulled in: <code>libnjs</code> (unitd NEEDED), <code>php84-embed</code>+<code>php84-common</code></li></ul>
+<p>(<code>libphp.so</code>), <code>argon2-libs</code>, <code>libedit</code>, <code>libxml2</code>.</p>
+<ul><li><code>patchelf 0.18</code> (edge/main) to rewrite RUNPATH.</li></ul>
+<h2>The two blockers and their fix (rootless)</h2>
+<ol><li><strong><code>libnjs.so</code> missing</strong> → unitd's own NEEDED. Fixed by extracting <code>libnjs</code></li></ol>
+<p>and setting <code>LD_LIBRARY_PATH</code> for the unitd launch (unitd resolves at exec).</p>
+<ol><li><strong>PHP module wouldn't dlopen</strong> — <code>php84.unit.so</code> had a **hardcoded</li></ol>
+<p><code>RUNPATH=/usr/lib/php84</code><strong> (unwritable without root), and Unit </strong>strips <code>LD_LIBRARY_PATH</code> for the discovery child**. Fix:</p>
+<ul><li>collect <code>libphp.so</code> + its deps into <code>/tmp/php84</code>;</li><li><strong><code>patchelf --set-rpath /tmp/php84</code></strong> on <strong>both</strong> <code>php84.unit.so</code> and</li></ul>
+<p><code>libphp.so</code>;</p>
+<ul><li>restart → <code>module: php 8.4.25</code> loads.</li></ul>
+<p>Python needed none of this: <code>python3.unit.so</code> has no RUNPATH and <code>libpython3.14.so.1.0</code> is already in <code>/usr/lib</code> (default musl path).</p>
+<h2>Config gotchas found (code-grounded)</h2>
+<ul><li><strong><code>spare</code> / <code>idle_timeout</code> are nested under <code>processes</code></strong>, not top-level:</li></ul>
+<p><code>"processes": { "spare": 1, "idle_timeout": 0 }</code>. Top-level → <code>"Unknown parameter \"spare\""</code> (atomic reject; whole config unchanged).</p>
+<ul><li><strong>Unit requires a lifespan-aware ASGI app.</strong> A naive ASGI app that ignores the</li></ul>
+<p><code>lifespan</code> scope throws <code>AssertionError: Got invalid state transition on lifespan protocol</code> on every request. Handling <code>lifespan.startup</code>/<code>shutdown</code> → 0 errors. (Python module advertises lifespan; must implement it.)</p>
+<ul><li>Partial <code>PUT</code>s are order-sensitive: setting a <code>listeners/pass</code> before the</li></ul>
+<p>referenced app exists fails; <strong>one full-config PUT</strong> is the robust path.</p>
+<h2>X10 spike — live confirmation</h2>
+<p><code>job_asgi.py</code> (the ASGI-lifespan job supervisor from the X10 spike) ran <strong>inside Unit</strong>, spawned its child, and the child was <strong>restarted on exit</strong> (START/EXIT pairs accumulating in <code>job.out</code>), while the app kept serving <code>{"job":"running"}</code>. This validates the X10 "run long-lived jobs in the Unit runtime" primitive on a real daemon — with <code>idle_timeout:0</code> + <code>spare:1</code> defeating the 15 s reaper.</p>
+<h2>Reproduce (sketch)</h2>
+<pre><code class="language-sh"># fetch apks into a prefix, extract (no root)
+# unitd needs libnjs on LD_LIBRARY_PATH
+patchelf --set-rpath &lt;prefix&gt;/php84 modules/php84.unit.so
+patchelf --set-rpath &lt;prefix&gt;/php84 php84/libphp.so
+unitd --control unix:/tmp/control.sock --modulesdir .../modules \
+      --user $UID --group $GID --statedir ... --log ...
+curl -X PUT --data-binary @config.json --unix-socket /tmp/control.sock \
+     http://localhost/config</code></pre>
+<h2>Why this matters</h2>
+<ul><li><strong>FreeUnit 1.36.1 ships in Alpine</strong> — a real distro-package signal; no build</li></ul>
+<p>needed to test the released daemon.</p>
+<ul><li>The <strong>PHP RUNPATH</strong> is a genuine <strong>rootless/packaging friction</strong> worth noting</li></ul>
+<p>for Docker/rootless deploys (a module that hardcodes <code>/usr/lib/&lt;lang&gt;</code> breaks when the prefix differs). Relevant to X11 (modular TLS) packaging discussion.</p>
+<ul><li>The <strong>job-shim works on the real daemon</strong> — X10 is not just theoretical.</li></ul>
+<script src="/freeunit-kb/assets/kb.js"></script>
+</body></html>

@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>engineering/laravel-existing-benchmarks</title>
+<link rel="stylesheet" href="/freeunit-kb/assets/kb.css">
+</head><body>
+<nav class="crumbs"><a href="/freeunit-kb/index.html">index</a> / engineering/laravel-existing-benchmarks</nav>
+
+<h1>engineering/laravel-existing-benchmarks</h1>
+<table class="meta"><tr><th>added</th><td>2026-07-20</td></tr><tr><th>context</th><td>FreeUnit P4 positioning for Laravel ecosystem</td></tr><tr><th>principle</th><td>Don't reinvent the benchmark wheel — study what exists first.</td></tr></table>
+<h1>Existing Laravel Benchmarks — Study Before Proposing New Ones</h1>
+<p><strong>Added:</strong> 2026-07-20 <strong>Context:</strong> FreeUnit P4 positioning for Laravel ecosystem <strong>Principle:</strong> Don't reinvent the benchmark wheel — study what exists first.</p>
+<h2>Known benchmark repositories and resources</h2>
+<h3>Official and community repos</h3>
+<table><thead><tr><th>Source</th><th>What it covers</th><th>URL</th></tr></thead><tbody><tr><td><strong>Laravel Octane</strong></td><td>Official Octane benchmarks, includes comparison helpers for Swoole and RoadRunner backends</td><td>github:laravel/octane</td></tr><tr><td><strong>PHP Benchmarks</strong></td><td>Cross-server comparison (nginx+fpm, RoadRunner, Swoole, FrankenPHP)</td><td>github:php-benchmarks</td></tr><tr><td><strong>PHP-FPM vs Swoole vs RoadRunner</strong></td><td>Community-driven throughput/latency comparisons</td><td>Public blog posts (multiple authors)</td></tr><tr><td><strong>FrankenPHP benchmarks</strong></td><td>Official FrankenPHP vs Caddy+FPM, RoadRunner comparisons</td><td>github:dunglas/frankenphp</td></tr><tr><td><strong>TechEmpower Framework Benchmarks</strong></td><td>Industry-standard cross-language benchmarks (PHP framework round)</td><td>techempower.com/benchmarks</td></tr><tr><td><strong>roadrunner-bench</strong></td><td>RoadRunner-specific benchmark scenarios</td><td>github:roadrunner-server</td></tr></tbody></table>
+<h3>What to look for</h3>
+<ol><li><strong>Their methodology</strong> — concurrency levels, keepalive vs close, warmup, noise floor</li><li><strong>Their app model</strong> — hello-world vs real Laravel app? How many service providers?</li><li><strong>Their metrics</strong> — RPS only? P50/P99? CPU µs/req? Memory?</li><li><strong>Their environment</strong> — CPU, RAM, kernel, PHP version, opcache settings</li></ol>
+<h2>Why this matters</h2>
+<p>Before FreeUnit designs its own Laravel benchmark suite, the team must:</p>
+<ol><li>Review existing repos for methodology flaws to avoid repeating them</li><li>Understand which scenarios already have solid data</li><li>Decide whether a new benchmark suite adds value or just duplicates effort</li><li>If new benchmarks are needed, design them to fill gaps (e.g. io_uring vs epoll for Laravel, datagram dispatch, persistent worker memory stability under Laravel load)</li></ol>
+<h2>Recommendation</h2>
+<ul><li>Scan GitHub for any Laravel benchmark repo with reproducible CI pipeline</li><li>If proposing a new FreeUnit Laravel benchmark, explain what gap it fills that existing benchmarks don't cover</li></ul>
+<script src="/freeunit-kb/assets/kb.js"></script>
+</body></html>

@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>engineering/release-1.37.0-description-check</title>
+<link rel="stylesheet" href="/freeunit-kb/assets/kb.css">
+</head><body>
+<nav class="crumbs"><a href="/freeunit-kb/index.html">index</a> / engineering/release-1.37.0-description-check</nav>
+
+<h1>engineering/release-1.37.0-description-check</h1>
+<table class="meta"><tr><th>date</th><td>2026-10-04. <strong>Ref:</strong> tag <code>1.37.0</code> = <code>61b297ac</code> ("release: prepare 1.37.0",</td></tr><tr><th>trigger</th><td>"проверь описание релиза".</td></tr></table>
+<h1>Release 1.37.0 — check of the release description</h1>
+<p><strong>Date:</strong> 2026-10-04. <strong>Ref:</strong> tag <code>1.37.0</code> = <code>61b297ac</code> ("release: prepare 1.37.0", 04 Oct 2026); published on GitHub 2026-10-04T18:10:44Z. <code>version</code> = <code>NXT_VERSION=1.37.0</code>. <strong>Trigger:</strong> "проверь описание релиза".</p>
+<h2>Reproduced defect — the install commands in the release body 404</h2>
+<p>The GitHub release body (2087 chars, packaging text only) tells the reader:</p>
+<pre><code>DEB=1.37.0-1~trixie
+curl -fLO &quot;$BASE/freeunit_${DEB}_amd64.deb&quot;</code></pre>
+<p>GitHub rewrites <code>~</code> to <code>.</code> in an uploaded asset name, so the stored name is <code>freeunit_1.37.0-1.trixie_amd64.deb</code>. Measured:</p>
+<ul><li><code>.../download/1.37.0/freeunit_1.37.0-1~trixie_amd64.deb</code> → <strong>404</strong>, and <code>curl -f</code> exits 22</li></ul>
+<p>(the copy-paste block fails at its second line);</p>
+<ul><li><code>.../download/1.37.0/freeunit_1.37.0-1.trixie_amd64.deb</code> → 200, 5 366 112 bytes.</li></ul>
+<p>The body's own prose acknowledges the rename ("the <code>.</code> in the asset file name is GitHub's renaming of <code>~</code>") while the commands keep the <code>~</code> form.</p>
+<p><strong>Worse, and older:</strong> <code>SHA256SUMS</code> (both 1.37.0 and 1.36.1) lists the files with <code>~</code> (11 lines), so <code>sha256sum -c --ignore-missing SHA256SUMS</code> matches nothing and silently verifies nothing. Newer than 1.37.0 — 1.36.1's manifest has the same naming.</p>
+<h2>The release description is missing the release notes</h2>
+<table><thead><tr><th>release</th><th>body length</th><th>content</th></tr></thead><tbody><tr><td>1.37.0</td><td>2 087</td><td>Debian trixie deb install instructions only</td></tr><tr><td>1.36.1</td><td>16 043</td><td>notes with sections + summary ("36 changes — 23 bugfixes…")</td></tr><tr><td>1.36.0</td><td>10 220</td><td>notes, security-first structure</td></tr></tbody></table>
+<p>So 1.37.0 has no summary, no change list and no Security callout in the place an operator looks first, while its CHANGES section holds 116 entries (16 of them Security).</p>
+<h2>CHANGES ↔ docs/changes.xml divergence (one entry)</h2>
+<p>Block <code>ver="1.37.0"</code> in <code>docs/changes.xml</code>: 115 entries (bugfix 60, change 31, security 16, feature 8). The CHANGES section: 116 (change 32). The extra entry is</p>
+<blockquote><p>Change: a QUIT that fails because the worker already exited is now logged at the info level, not as an alert.</p></blockquote>
+<p>Token-compare of all other entries found no other divergence (the njs 1.0.1 and the "upgrade contrib njs" wordings do match). Regeneration from the XML would drop that line from the site changelog.</p>
+<h2>Advisories</h2>
+<p><code>/repos/freeunitorg/freeunit/security-advisories</code> lists two, both published 2026-07-17 (1.36.0 cycle). None for 1.37.0, whose 16 Security entries include request-reachable class fixes (shared compressor stream between clients, unescaped access-log JSON values, the route-regex ReDoS). Caveat: advisory drafts are not visible to the read-only token, so this is "publicly none", not "none exist".</p>
+<h2>Site</h2>
+<p><code>freeunitorg/docs</code> (default branch <code>main</code>) last moved 2026-08-31 ("docs(release): 1.36.1 site update"): no 1.37.0 news entry and no CHANGES.txt section yet.</p>
+<h2>Verified as correct</h2>
+<ul><li>version = tag = CHANGES header (04 Oct 2026) = GitHub <code>published_at</code> (04 Oct); no</li></ul>
+<p>off-by-one date this cycle.</p>
+<ul><li>Minor is the right bump: 8 Feature + 32 Change entries under the project's rule</li></ul>
+<p>"patch = security/DoS fixes only".</p>
+<ul><li>Changelog coverage of the window: 316 non-merge commits since 1.36.1, only 4 without a</li></ul>
+<p>matching entry (three CI/test-only, one <code>Vary</code> tidy-up).</p>
+<ul><li>CHANGES at the tag is identical to CHANGES on master.</li><li>Spot checks against the code at the tag: <code>body_min_rate</code>/<code>send_min_rate</code> (default 0,</li></ul>
+<p>"256 is a good value" — as written), <code>NXT_REGEX_MATCH_LIMIT</code> = 100 000 steps in <code>src/nxt_regex.h</code> (the entry itself states "at most 100 000" and names the pre-fix 10 000 000), certificate <code>fingerprint</code> in <code>src/nxt_cert.c</code>, <code>--hardening=</code> in <code>auto/options</code>, cgroup-v2-aware default for <code>listen_threads</code>.</p>
+<ul><li>Assets: 12 (core, php8.3/8.4/8.5, python3.13, <code>-dbg</code>/<code>-dev</code>, SHA256SUMS) — matches the</li></ul>
+<p>module list the body offers.</p>
+<h2>To fix</h2>
+<ol><li>In the release body: <code>~</code> → <code>.</code> in the file names (or use <code>gh release download</code>); decide</li></ol>
+<p>separately whether <code>SHA256SUMS</code> should carry the GitHub names.</p>
+<ol><li>Put the release notes into the release body (summary + sections, Security as its own</li></ol>
+<p>callout).</p>
+<ol><li>Add the QUIT-logging entry to <code>docs/changes.xml</code>.</li><li>Decide the GHSA question for 1.37.0 before any announcement cites ids.</li><li>Update the site.</li></ol>
+<script src="/freeunit-kb/assets/kb.js"></script>
+</body></html>

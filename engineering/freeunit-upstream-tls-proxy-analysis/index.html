@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>engineering/freeunit-upstream-tls-proxy-analysis</title>
+<link rel="stylesheet" href="/freeunit-kb/assets/kb.css">
+</head><body>
+<nav class="crumbs"><a href="/freeunit-kb/index.html">index</a> / engineering/freeunit-upstream-tls-proxy-analysis</nav>
+
+<h1>engineering/freeunit-upstream-tls-proxy-analysis</h1>
+<table class="meta"><tr><th>date</th><td>2026-10-15 · <strong>Ask:</strong> run FreeUnit as a proxy so LAN browsers reach</td></tr></table>
+<h1>FreeUnit as a TLS-terminating reverse / MITM proxy for НУЦ-signed sites</h1>
+<p><strong>Date:</strong> 2026-10-15 · <strong>Ask:</strong> run FreeUnit as a proxy so LAN browsers reach RU sites signed by the regional НУЦ; the site sees FreeUnit's IP; FreeUnit terminates client TLS; LAN users do not install the НУЦ root on each machine. Are there ready Rust/Go solutions?</p>
+<h2>Verdict</h2>
+<p>Not as asked. Two FreeUnit blockers and one fundamental limit.</p>
+<h3>1. Forward vs reverse proxy</h3>
+<p>The ask is a <strong>forward / MITM proxy</strong> (browser -&gt; proxy -&gt; arbitrary sites): it needs HTTP <code>CONNECT</code> and on-the-fly certificate generation. FreeUnit is a server-side <strong>reverse</strong> proxy with fixed listeners and virtual hosts. It has no forward-proxy mode.</p>
+<h3>2. No upstream TLS (confirmed in code)</h3>
+<p>The <code>proxy</code> action takes only <code>{ "proxy": "&lt;upstream-name&gt;" }</code> plus common action members — no <code>tls</code>/<code>verify</code> key. The proxy module and the upstream module carry no <code>SSL_</code>/<code>X509_</code>/<code>verify</code>/certificate code. Upstream connections are <strong>plain HTTP</strong>; FreeUnit terminates TLS only on the listener (client side). =&gt; FreeUnit cannot fetch an HTTPS origin as a TLS client. Blocker.</p>
+<h3>3. The certificate "downstream" problem (fundamental)</h3>
+<p>To serve browsers without installing the НУЦ root, the proxy must present a certificate the browser already trusts:</p>
+<ul><li>a public CA (ACME) — only for domains <strong>the operator owns</strong>;</li><li>the operator's <strong>own</strong> CA root, deployed to the machines (GPO/MDM) — this</li></ul>
+<p>swaps "install the НУЦ root" for "install your root": the same per-machine install, but one and centralised.</p>
+<p>Otherwise the browser shows a warning. For arbitrary third-party sites, "no root on any machine" is impossible with any software.</p>
+<h2>Ready solutions</h2>
+<ul><li><strong>Reverse proxy with upstream TLS</strong> (operator owns / fixed set): <strong>Caddy</strong></li></ul>
+<p>(on-demand TLS + internal CA downward, <code>reverse_proxy https://</code> + trusted CA upward), <strong>nginx / Angie / HAProxy / Traefik</strong> (<code>proxy_ssl_verify</code> + <code>proxy_ssl_trusted_certificate</code>). FreeUnit cannot until a TLS client lands.</p>
+<ul><li><strong>Transparent MITM</strong> (arbitrary sites): <strong>Go</strong> <code>elazarl/goproxy</code>,</li></ul>
+<p><code>go-gost/gost</code>, Envoy; <strong>Rust</strong> <code>hudsucker</code>, Pingora; classic <strong>mitmproxy</strong>, <strong>Squid</strong> <code>ssl_bump</code>. Still needs the operator's root pushed once.</p>
+<h2>For FreeUnit</h2>
+<p>"Upstream TLS" (TLS as client) is a new feature — absent today. A symmetric TLS layer is the natural output of the 1.38 TLS-module work (listener + upstream). Candidate feature request.</p>
+<h2>Ecosystem (adoption, checked 2026-10-15)</h2>
+<p>Stars: Caddy 78.0k, Traefik 65.2k, mitmproxy 45.6k, nginx 31.9k, Envoy 29.1k, Pingora 27.6k, gost 7.6k, HAProxy 6.9k, goproxy 6.8k, hudsucker 380.</p>
+<p>Pingora (<code>cloudflare/pingora</code>): <strong>active but vendor-driven, not abandoned.</strong> Releases 0.6 (2025-08) -&gt; 0.9.0 (2026-09); last commit 2026-09-11; ~100+ commits/yr; 27.6k stars, 1.77k forks. But the community side is thin: 314 open issues, ~half never answered, ~5% closed in a year; outside PRs rarely merged; maintained by a Cloudflare team. It is a Rust <strong>library/framework</strong> (build your own proxy), not a turnkey product.</p>
+<p>Stars measure popularity, not fitness.</p>
+<h2>Angie and existing RU / НУЦ solutions (checked 2026-10-15)</h2>
+<p><strong>Angie</strong> (<code>webserver-llc/angie</code>, mirror git.angie.software): <strong>2.6k stars</strong>, 44 open issues, last push 2026-10-13, BSD-2-Clause, "drop-in replacement for nginx", forked by ex-nginx developers (RU). Built-in ACME with EAB, upstream TLS (<code>proxy_ssl_*</code>), HTTP/3 on both sides; SM2/SM3/SM4 + NTLS (TongSuo) in-tree.</p>
+<p>Patterns that already exist:</p>
+<ul><li><strong>Reverse proxy trusting a НУЦ upstream:</strong> nginx / Angie —</li></ul>
+<p><code>proxy_pass https://backend; proxy_ssl_verify on; proxy_ssl_server_name on; proxy_ssl_trusted_certificate &lt;russian_trusted_root_ca.pem&gt;;</code>. The proxy holds the НУЦ root once.</p>
+<ul><li><strong>GOST-signed upstream (Минцифры/ЦБ):</strong> <strong>cpnginx</strong> (nginx built with</li></ul>
+<p>CryptoPro) — GOST + RSA termination, proxy to an internal nginx.</p>
+<ul><li><strong>ACME issuance for НУЦ:</strong> acme.sh (НУЦ fork) and wrappers</li></ul>
+<p><code>stufently/traefik-nuc-acme</code>, <code>BogdanNL/nuc-acme-sh-axelname-docker</code>.</p>
+<ul><li><strong>Root certs:</strong> <code>koenrh/russian-trusted-root-ca</code>, <code>cocaman/russian_root_ca</code>.</li><li><strong>Analyser:</strong> <code>CertIZDAT/russian-trusted-root-ca-analyzer</code> — 715 government</li></ul>
+<p>sites require the Russian Trusted CA, 249 use self-signed; browsers mark them insecure except Yandex / custom Chromium, and only for whitelisted domains.</p>
+<ul><li><strong>"No root on each device" is solved at the client:</strong> <code>ezhkov-ph/bely-lis-android</code></li></ul>
+<p>(a Firefox build with the Russian Trusted Root CA embedded), Yandex Browser, Atom; <code>x86law-dev/ru-cert</code> installs the roots on Windows.</p>
+<p>No single famous Reddit "RU НУЦ reverse proxy" recipe; the working pattern is the standard nginx/Angie <code>proxy_ssl_*</code> plus the prebuilt roots.</p>
+<h2>Extension points: wasm / external (checked in code)</h2>
+<p>Unit app types: <code>external</code>, <code>python</code>, <code>php</code>, <code>perl</code>, <code>ruby</code>, <code>java</code>, <code>wasm</code>, <code>wasm-wc</code>. App modules load <strong>dynamically</strong> (<code>dlopen</code> + <code>dlsym("nxt_app_module")</code> plus a discovery scan), but the ABI is for <strong>application languages only</strong> — there is no loadable HTTP / proxy / TLS module ABI. So neither mechanism yields upstream TLS:</p>
+<ul><li><strong><code>external</code></strong> — an out-of-process app. A <strong>workaround</strong>: the app fetches the</li></ul>
+<p>HTTPS origin itself (trusting the НУЦ root) and returns the body; FreeUnit fronts it with client TLS. Core change 0, but <code>proxy_pass</code> semantics are lost.</p>
+<ul><li><strong><code>wasm</code> / <code>wasm-wc</code></strong> — a sandboxed WASI app (request/response only; no</li></ul>
+<p>outbound network in the module). Not usable as a TLS client.</p>
+<p>The clean fix is TLS-as-client inside the proxy module — the 1.38 TLS-module direction.</p>
+<h2>Site lists that serve the НУЦ root (third-party, checked 2026-10-15)</h2>
+<p>There is <strong>no official registry</strong> — Минцифры publishes only the CA certificates and install guides (gosuslugi.ru/landing/crt, mos.ru/cert, sber, comss.ru). Crowdsourced lists live on GitHub:</p>
+<ul><li><strong><code>CertIZDAT/russian-trusted-root-ca-analyzer</code></strong> (35 stars, default branch</li></ul>
+<p><code>master</code>): <code>dataset/government_domains.txt</code> — <strong>21 237</strong> government domains; <code>dataset/social.txt</code> — 363; <code>dataset/top-100.txt</code> — 101 (a traffic top list, not НУЦ-specific); <code>results/{government,social,top}/</code>; <code>statistics.db</code> (SQLite, 4.9 MB). README: <strong>715</strong> government sites <em>require</em> the Russian Trusted CA, <strong>249</strong> use self-signed.</p>
+<ul><li><strong><code>koenrh/russian-trusted-root-ca</code></strong> (7 stars): <code>tls_list_cleaned.txt</code> —</li></ul>
+<p><strong>3 930</strong> domains, plus the PEMs and CRLs.</p>
+<ul><li><strong><code>cocaman/russian_root_ca</code></strong> (4 stars): <code>tls_list.csv</code> (86 KB) and</li></ul>
+<p><code>tls_list2..5.csv</code> — <strong>4 883</strong> domains.</p>
+<p>Samples (koenrh/cocaman — confirmed serving НУЦ): <code>komission.vtb.ru</code>, <code>mgt.api.vtb.ru</code>, <code>cloud.sbermarketing.ru</code>, <code>transstroybank.ru</code>, <code>webcon01.msk.vtb.ru</code>, <code>*.ingos.ru</code>, <code>online.mcbank.ru</code> (mostly banks). Sample (CertIZDAT government): <code>minobr.nso.ru</code>, <code>budget.minfin-samara.ru</code>, <code>soc.pskov.ru</code>, <code>artmuseum.karelia.ru</code>, <code>letters.bashkortostan.ru</code>.</p>
+<p>Caveat: the data is dated 2020-2022 (headers <code># 08.10.2022</code>, <code># june 2022</code>), so it has drifted; "requires НУЦ" != "only НУЦ".</p>
+<script src="/freeunit-kb/assets/kb.js"></script>
+</body></html>

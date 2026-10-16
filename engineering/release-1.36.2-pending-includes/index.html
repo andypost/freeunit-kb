@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Forthcoming release — what from the #500+ wave belongs in it</title>
+<link rel="stylesheet" href="/freeunit-kb/assets/kb.css">
+</head><body>
+<nav class="crumbs"><a href="/freeunit-kb/index.html">index</a> / engineering/release-1.36.2-pending-includes</nav>
+<p class="banner warn">triage</p>
+<h1>Forthcoming release — what from the #500+ wave belongs in it</h1>
+<table class="meta"><tr><th>description</th><td>Triage of open PRs #508/#515–#523 and issue #516 against the pending release. Security/DoS fixes are patch-worthy (per the semver rule); bugs, leaks and perf go to the next patch/minor. Draft status noted (only #508/#515/#523 are ready).</td></tr><tr><th>tags</th><td>release, triage, security, dos, semver</td></tr><tr><th>updated</th><td>2026-09-27</td></tr></table>
+<h1>Pending release — what from #500+ belongs in it</h1>
+<blockquote><p><strong>OUTCOME (2026-10-04): the wave shipped as MINOR 1.37.0</strong> (tag <code>1.37.0</code>, published 2026-10-04T18:10:44Z) — not as the patch 1.36.2 this triage planned. Its 116-entry section carries 8 Feature and 32 Change entries, which is exactly why it could not be a patch. Read the triage below as history; the current release-description findings live in <code>release-1.37.0-description-check</code>.</p></blockquote>
+<h2>Vehicle</h2>
+<p>The pending release is <strong>1.36.2</strong> (patch):</p>
+<ul><li>latest tag <strong>1.36.1</strong> (<code>90c5ffb8</code>); <code>master:version</code> still <code>NXT_VERSION=1.36.1</code> /</li></ul>
+<p><code>NXT_VERNUM=13601</code> (not bumped).</p>
+<ul><li><code>CHANGES</code> top block <strong>"Changes with FreeUnit 1.36.2 — 30 Aug 2026"</strong> is open and</li></ul>
+<p>already carries the shared-memory hardening (read-once records + the <code>UINT32_MAX</code> segment id) — i.e. <strong>#445 / #505 are folded into 1.36.2</strong>.</p>
+<p>Reminder (project rule): <strong>patch = security / DoS only; features, API and breaking changes go to a minor.</strong> (The intern's original 1.36.2 plan carried 2 Feature entries — that is exactly why it is really 1.37.0 material; see the split note elsewhere.)</p>
+<h2>Triage of #508/#515–#523</h2>
+<h3>Security / DoS → must be in a patch (1.36.2)</h3>
+<table><thead><tr><th>PR</th><th>What</th><th>Draft?</th></tr></thead><tbody><tr><td><strong>#508</strong></td><td>http: add <code>body_min_rate</code> + <code>send_min_rate</code> — <code>body_read_timeout</code>/<code>send_timeout</code> are <strong>gap timers</strong>, so a byte just before each deadline holds a connection forever (slow POST / slow read). <code>header_read_timeout</code> is a single budget and is unaffected. <strong>This is the exact gap a <code>min_body_rate</code> closes.</strong></td><td><strong>ready</strong></td></tr><tr><td><strong>#515</strong></td><td>fix(isolation): unshare the <strong>cgroup namespace after</strong> the cgroup move — with <code>namespaces.cgroup: true</code> the app's <code>/proc/self/cgroup</code> was rooted at the main process (<code>0::/scope/python</code> instead of <code>0::/</code>). Containment.</td><td><strong>ready</strong></td></tr><tr><td><strong>#517</strong></td><td>wasm: check the guest <code>malloc</code> result against the <strong>linear memory size</strong> — the guest i32 was sign-extended into <code>size_t</code>, moved the host base below linear memory, and the first request wrote the header <strong>out of bounds</strong>. Sandbox memory corruption.</td><td>draft</td></tr><tr><td><strong>#520</strong></td><td>regex: cap a pattern's match work at <strong>1,000,000 steps</strong> — <code>pcre2_match()</code> ran with no limit; <code>^/(.<em>)/(.</em>)[xy]$</code> backtracks quadratically → ~167 ms <strong>router CPU per request</strong> on an 8 KiB URI → ReDoS thread stall (and the log echoed the full URI).</td><td>draft</td></tr><tr><td><strong>#521</strong></td><td>isolation: create mount destinations <strong>without following symlinks</strong> — <code>nxt_fs_mkdir_p()</code> followed a symlink, letting a writable-rootfs app make the prototype create dirs <strong>outside the rootfs as root</strong> (escape); pre-openat2 it also mounted the unchecked path.</td><td>draft</td></tr><tr><td><strong>#522</strong></td><td>http: bound <strong>WebSocket pings</strong> answered per connection — the router PONGs every PING without waiting for the write side, so a PING-flood + slow read grows the pending write queue without limit. New option <code>settings/http/websocket/max_pings</code>.</td><td>draft</td></tr></tbody></table>
+<h3>Bugfix (not security) → next patch</h3>
+<table><thead><tr><th>PR</th><th>What</th><th>Draft?</th></tr></thead><tbody><tr><td><strong>#518</strong></td><td>php: <strong>free the root path buffer</strong> when <code>realpath()</code> fails (leak) + two wrong route comments.</td><td>draft</td></tr><tr><td><strong>#519</strong></td><td>port: never hand out <strong>RPC stream 0</strong> after the 32-bit counter wraps — wrapped callers treat 0 as failure and skip <code>nxt_port_rpc_cancel()</code>, leaking handler registrations. Needs 2^32 ops to reach.</td><td>draft</td></tr></tbody></table>
+<h3>Feature / perf → minor (1.37.0)</h3>
+<table><thead><tr><th>PR</th><th>What</th><th>Draft?</th></tr></thead><tbody><tr><td><strong>#523</strong> (issue <strong>#516</strong>)</td><td>main: store the atomic state files in a <strong>short-lived child process</strong> — the two <code>fsync()</code> per stored file run in the event loop; a reconfigure on pro4s-4 took 19.1 → 42.2 ms and SIGTERM 5.0 → 17.4 ms.</td><td><strong>ready</strong></td></tr></tbody></table>
+<h2>Recommendation</h2>
+<ul><li><strong>Patch now (ready, high value):</strong> <strong>#508</strong> (closes the slow-POST/slow-read hole) and <strong>#515</strong> (cgroup-ns containment). Both non-draft.</li><li><strong>Land before the tag once reviewed:</strong> #517, #520, #521, #522 — all four are</li></ul>
+<p>security/DoS and belong in a patch; they are still drafts, so finishing them is the gating step. #521 (rootfs escape) and #517 (wasm OOB) are the most severe.</p>
+<ul><li><strong>Not for the patch:</strong> #518 / #519 (bugfix/leak) → next patch; <strong>#523 / #516</strong> is a</li></ul>
+<p>perf change → 1.37.0.</p>
+<script src="/freeunit-kb/assets/kb.js"></script>
+</body></html>

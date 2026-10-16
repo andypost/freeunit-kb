@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>engineering/wordpress-cron-queue-stub</title>
+<link rel="stylesheet" href="/freeunit-kb/assets/kb.css">
+</head><body>
+<nav class="crumbs"><a href="/freeunit-kb/index.html">index</a> / engineering/wordpress-cron-queue-stub</nav>
+
+<h1>engineering/wordpress-cron-queue-stub</h1>
+<table class="meta"><tr><th>date</th><td>2026-09-11 · <strong>Status:</strong> built + tested live on running unitd 1.36.1</td></tr><tr><th>artifacts</th><td><code>tools/artisan_stubs/wordpress_stub.py</code></td></tr></table>
+<h1>WordPress cron + Action Scheduler as a Unit app</h1>
+<p><strong>Date:</strong> 2026-09-11 · <strong>Status:</strong> built + tested live on running unitd 1.36.1 <strong>Artifacts:</strong> <code>tools/artisan_stubs/wordpress_stub.py</code></p>
+<h2>WordPress model = one-shot ticks (like Drupal), two jobs</h2>
+<p>WordPress has <strong>no built-in worker daemon</strong>. Two scheduling surfaces:</p>
+<ol><li><strong>WP-Cron</strong> is a <strong>pseudo-scheduler</strong> — it only fires on a page load, not on a</li></ol>
+<p>real clock. Production pattern: <code>define('DISABLE_WP_CRON', true)</code> in <code>wp-config.php</code> + a real scheduler running <code>wp cron event run --due-now</code>.</p>
+<ol><li><strong>Action Scheduler</strong> (WooCommerce et al.) is the real <strong>job queue</strong> —</li></ol>
+<p><code>wp action-scheduler run</code> processes a batch and exits (one-shot).</p>
+<p>→ Same family as Drupal: <strong>tick scheduler</strong>, not a supervisor. <code>wordpress_stub.py</code> runs <strong>two independent tickers</strong> via ASGI lifespan:</p>
+<ul><li><code>wp cron event run --due-now</code> every <code>CRON_INTERVAL</code>;</li><li><code>wp action-scheduler run &lt;args&gt;</code> every <code>AS_INTERVAL</code>.</li></ul>
+<p>Each ticker <strong>awaits</strong> its run before sleeping → no overlap/stacking.</p>
+<h2>Live test (running unitd)</h2>
+<p><code>CRON_INTERVAL=3</code>, <code>AS_INTERVAL=2</code>, fake wp-cli. Observed over ~7 s:</p>
+<pre><code>cron event run --due-now                          @ :23, :26, :29   (every 3s)
+action-scheduler run --batch-size=25 --batches=4  @ :23,:25,:27,:29 (every 2s)</code></pre>
+<p>Health <code>:8810/</code> → <code>{"cron_interval":3,"action_scheduler":true,"as_interval":2}</code> ✅</p>
+<h2>Config</h2>
+<pre><code class="language-json">&quot;applications&quot;: {
+  &quot;wordpress&quot;: {
+    &quot;type&quot;: &quot;python&quot;, &quot;path&quot;: &quot;&lt;stubs dir&gt;&quot;,
+    &quot;module&quot;: &quot;wordpress_stub&quot;, &quot;callable&quot;: &quot;application&quot;,
+    &quot;processes&quot;: { &quot;spare&quot;: 1, &quot;idle_timeout&quot;: 0 },
+    &quot;environment&quot;: {
+      &quot;WP&quot;: &quot;/var/www/html/wp-cli.phar&quot;,
+      &quot;WP_PATH&quot;: &quot;/var/www/html&quot;,
+      &quot;WP_URL&quot;: &quot;https://example.com&quot;,
+      &quot;CRON_INTERVAL&quot;: &quot;60&quot;,
+      &quot;ENABLE_AS&quot;: &quot;1&quot;,
+      &quot;AS_INTERVAL&quot;: &quot;60&quot;,
+      &quot;AS_RUN_ARGS&quot;: &quot;--batch-size=25 --batches=4&quot;
+    }
+  }
+}</code></pre>
+<ul><li><strong><code>spare: 1</code></strong> — eager start (no listener → never lazily started otherwise).</li><li><strong><code>idle_timeout: 0</code></strong> — no-request app → else reaped at 15 s. (Under <code>processes</code>.)</li></ul>
+<h2>WordPress-specific notes (verified against wp-cli docs)</h2>
+<ul><li><strong>Disable the pseudo-cron</strong>: add <code>define('DISABLE_WP_CRON', true);</code> to</li></ul>
+<p><code>wp-config.php</code>, else WP-Cron fires on every page load AND here → double runs. The ticker is the <em>replacement</em> for that pseudo-scheduler.</p>
+<ul><li><code>wp cron event run --due-now</code> clears the backlog (all overdue events). Use</li></ul>
+<p><code>--quiet</code> to keep logs small; we capture the tail anyway.</p>
+<ul><li><strong>Action Scheduler</strong> is the correct queue for per-job failure tracking and</li></ul>
+<p>no-data-loss (WooCommerce uses it). Tune with <code>--batch-size</code> / <code>--batches</code>. Set <code>ENABLE_AS=0</code> on sites without it (the ticker would just error harmlessly).</p>
+<ul><li>Run wp-cli as the <strong>same user</strong> that owns the docroot (file perms); in a</li></ul>
+<p>rootless Unit setup pass <code>--allow-root</code> only if truly required.</p>
+<ul><li>Timing: WP-Cron events have a 1-minute granularity by default → <code>CRON_INTERVAL=60</code></li></ul>
+<p>matches; Action Scheduler wants frequent runs → <code>AS_INTERVAL=60</code> (or lower).</p>
+<h2>Relation to the other stubs</h2>
+<table><thead><tr><th>Scenario</th><th>Stub</th><th>Inner loop</th><th>Jobs</th></tr></thead><tbody><tr><td>Laravel <code>queue:work</code>/<code>horizon</code></td><td><code>worker_core.py</code></td><td>supervise long-lived child</td><td>1 daemon</td></tr><tr><td>Drupal cron+queues</td><td><code>drupal_stub.py</code></td><td>scheduler of drush ticks</td><td>cron + N queues</td></tr><tr><td><strong>WordPress</strong></td><td><strong><code>wordpress_stub.py</code></strong></td><td>scheduler of wp-cli ticks</td><td>wp-cron + action-scheduler</td></tr><tr><td>ACME renew</td><td><code>acme_stub.py</code> / certbot hook</td><td>scheduled renew + deploy</td><td>renewal</td></tr></tbody></table>
+<p>All are ASGI-lifespan apps in the Unit runtime — the X10 primitive applied to four workloads, same <code>spare:1</code> + <code>idle_timeout:0</code> requirement, one config, no host cron, no Supervisor.</p>
+<h2>Caveats</h2>
+<ul><li>Both WP-Cron and Action Scheduler assume <strong>only one runner</strong> at a time (WP</li></ul>
+<p>locks internally, but overlapping runners waste work). Our await-before-sleep tickers guarantee one run per job at a time.</p>
+<ul><li>For multi-worker scale, <code>processes.max&gt;1</code> would duplicate the scheduler → keep</li></ul>
+<p>the <strong>stub at exactly one process</strong> (<code>spare:1</code>, no <code>max</code>) and scale the <strong>web</strong> app separately.</p>
+<script src="/freeunit-kb/assets/kb.js"></script>
+</body></html>

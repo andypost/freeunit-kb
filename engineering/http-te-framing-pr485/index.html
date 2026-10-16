@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>engineering/http-te-framing-pr485</title>
+<link rel="stylesheet" href="/freeunit-kb/assets/kb.css">
+</head><body>
+<nav class="crumbs"><a href="/freeunit-kb/index.html">index</a> / engineering/http-te-framing-pr485</nav>
+
+<h1>engineering/http-te-framing-pr485</h1>
+
+<h1>Transfer-Encoding framing on the proxy path (PR #485)</h1>
+<p>Reviewed at head <code>7faf46b4782e</code> (fix/proxy-peer-transfer-encoding), 2026-09-26. Facts below are from the diff and from the file at that head, not from a run.</p>
+<h2>What the PR changes</h2>
+<p><code>nxt_h1p_peer_transfer_encoding()</code> (src/nxt_h1proto.c, upstream response headers) used to accept only the exact 7-byte value <code>chunked</code>; any other value left <code>h1p-&gt;chunked</code> at 0, so the response was framed by Content-Length or by connection close and the chunk framing reached the client as body bytes. It now parses the value as a comma-separated list of codings: SP/HTAB trimmed, empty elements ignored (RFC 9110 5.6.1), names compared case-insensitively, <code>chunked</code> accepted only once and only as the whole list. State carries across several <code>Transfer-Encoding</code> lines through <code>h1p-&gt;transfer_encoding</code> (an existing 2-bit field on <code>nxt_h1proto_t</code>). <code>h1p-&gt;chunked</code> is now derived once in <code>nxt_h1p_peer_header_read_done()</code> instead of being set inside the field handler.</p>
+<p>Result states: <code>NXT_HTTP_TE_CHUNKED</code> only for a whole list of one <code>chunked</code> in any letter case; everything else - unknown coding, <code>gzip, chunked</code>, <code>chunked, gzip</code>, chunked twice, empty value, coding with parameters - is <code>NXT_HTTP_TE_UNSUPPORTED</code>, which the caller turns into 502. The proxy never forwards <code>Transfer-Encoding</code> downstream (<code>field-&gt;skip = 1</code>).</p>
+<h2>Asymmetry with the request path</h2>
+<p><code>nxt_h1p_transfer_encoding()</code> (same file, :901) is UNCHANGED and still does the exact, case-sensitive comparison. A client sending legal <code>Transfer-Encoding: Chunked</code> or <code>gzip, chunked</code> gets 501 Not Implemented (<code>NXT_HTTP_TE_UNSUPPORTED</code> -&gt; 501 at :975); a second <code>chunked</code> field gets</p>
+<ol><li>It fails closed, so there is no smuggling hole, but the same file now implements RFC 9112</li></ol>
+<p>6.1 in two different ways and the two handlers should be routed through one list parser.</p>
+<h2>Order of checks vs bodyless responses</h2>
+<p>The new <code>NXT_HTTP_TE_UNSUPPORTED</code> arm (:2903) and the older chunked+Content-Length arm (:2917) both sit ABOVE the bodyless-response block (:2953, <code>nxt_http_request_is_bodyless_final()</code>), whose own comment states RFC 9112 6.3: a response to HEAD, and any 204 or 304, ends at the first empty line "no matter what Content-Length or Transfer-Encoding say". So a 204/304/HEAD carrying a TE the proxy cannot decode (e.g. <code>gzip, chunked</code>, <code>identity</code>) now yields 502 where it previously yielded a normal bodyless response. Exact <code>chunked</code> in any letter case is unaffected: it reaches the bodyless path and completes there.</p>
+<h2>Premise checked</h2>
+<p>The new comment claims the upstream connection is closed after every response, so a framing error cannot reach a reused connection. Corroborated in the tree: <code>nxt_h1p_peer_header_send()</code> always asks the upstream for <code>Connection: close</code> (:2929-2930), so no upstream connection is reused.</p>
+<h2>Test</h2>
+<p><code>test/test_proxy_te.py</code> (new, port 7976 registered in test/fake_upstream/README.md) parametrises chunked in lower/upper/mixed case and OWS, and 502 for TE+Content-Length, <code>gzip, chunked</code>, <code>chunked, gzip</code>, two lines, chunked twice, <code>chunked;a=b</code>, <code>,</code>, and <code>identity</code>. The 502 cases also assert the upstream body was not relayed, so the check is not vacuous. Gaps: every upstream response carries <code>Connection: close</code>, so the no-reuse premise is exercised by code reading only, and no case has a bodyless response with an undecodable TE.</p>
+<script src="/freeunit-kb/assets/kb.js"></script>
+</body></html>

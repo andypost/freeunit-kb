@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>engineering/zen-review-pr-296</title>
+<link rel="stylesheet" href="/freeunit-kb/assets/kb.css">
+</head><body>
+<nav class="crumbs"><a href="/freeunit-kb/index.html">index</a> / engineering/zen-review-pr-296</nav>
+
+<h1>engineering/zen-review-pr-296</h1>
+
+<h1>zen-review PR #296 — test(python): make the prototype-kill test skip outside its window</h1>
+<p>_2026-09-08. Review of freeunitorg/freeunit#296. MERGED 2026-09-08 16:51:37 UTC. _+44/−22, 2 files. Test-robustness follow-up to #288 (which merged before the fix landed)._</p>
+<h2>Two real fixes (not cosmetic)</h2>
+<ol><li><strong>Regex bug in <code>skip_alert</code>:</strong> <code>fr'\b{worker}#{worker} '</code> → <code>fr'\b{worker}#\d+ '</code>.</li></ol>
+<p>The old pattern required pid#pid, which holds only for a main thread on Linux. On real Linux, tids != pids, so the skip never matched. Correct: scope by the pid (the point of the skip), let the tid be. Sources cite <code>src/nxt_unit.c:7319</code> and <code>src/nxt_app_log.c:63</code> (pid#tid).</p>
+<ol><li><strong>Window-entry guard:</strong> before the kill, read <code>/status</code> `applications[..][</li></ol>
+<p>processes]['starting']<code>; if != 1, </code>pytest.skip<code>. </code>starting<code> is </code>app-&gt;pending_processes<code> (</code>nxt_router.c:1103`), returned only at worker-port- ready, so "inside the window" is now a precondition, not an assertion. A slow runner skips instead of reporting a failure the test did not drive.</p>
+<ol><li><strong>Bounded fork-wait:</strong> 100→40 iterations + <code>pytest.skip</code> instead of</li></ol>
+<p><code>assert workers</code> (protects against "the prototype never forked a worker").</p>
+<ol><li><strong><code>/status</code> field confirmed to exist</strong> — <code>nxt_status.c:44</code> emits <code>"starting"</code></li></ol>
+<p>serialized from <code>pending_processes</code>; the guard reads it correctly.</p>
+<h2>Verdict: APPROVE (merged)</h2>
+<ul><li>✅ Real bypassed-skip fix (<code>\d+</code>) — genuine, not a flaky-test paper-over.</li><li>✅ Window guard is a precondition read, correctly scoped to skip.</li><li>✅ Focus: the test was failing slower runners and pointing at the fix (the</li></ul>
+<p>router change) instead of the runner. Now accurate.</p>
+<h2>Notes</h2>
+<ul><li>Follow-up to the #288 review comment. #288 itself merged (master head</li></ul>
+<p><code>7cda8d6d</code>), and both #295 and #296 now sit on top of it.</p>
+<script src="/freeunit-kb/assets/kb.js"></script>
+</body></html>

@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>releases/1.36.0-announcement-ru</title>
+<link rel="stylesheet" href="/freeunit-kb/assets/kb.css">
+</head><body>
+<nav class="crumbs"><a href="/freeunit-kb/index.html">index</a> / releases/1.36.0-announcement-ru</nav>
+
+<h1>releases/1.36.0-announcement-ru</h1>
+
+<h1>🚀 FreeUnit 1.36.0</h1>
+<p>Вышла 16 июля 2026 года. 307 файлов, +19 034 / −5 581 строк относительно 1.35.5.</p>
+<h2>📡 OpenTelemetry — полностью переписан</h2>
+<ul><li><strong>Апгрейд OTel SDK:</strong> Rust-крейты с 0.24 на 0.32. Экспортёр переписан на выделенный поток с batch span processor — без tokio runtime, блокирующий reqwest клиент.</li><li><strong>gRPC возвращается:</strong> <code>settings/telemetry/protocol</code> = <code>http</code> или <code>grpc</code>. OTLP/gRPC на tonic с небольшим tokio runtime, пока без TLS.</li><li><strong>Traceparent:</strong> проброс upstream sampling decision через <code>ParentBased(TraceIdRatioBased)</code> — W3C trace flags больше не игнорируются.</li><li><strong>mock OTLP коллектор:</strong> <code>test/fake_otlp/</code> и <code>test_otel.py</code> — полный тестовый набор (span export, propagation, sampling, конфиг валидация).</li><li><strong>Валидация конфига:</strong> <code>batch_size</code> (1–65536), <code>sampling_ratio</code> (0–1) теперь с внятными сообщениями об ошибках.</li><li><strong>Логирование:</strong> eprintln из Rust-слоя заменён на C callback <code>nxt_otel_log_cb</code> — ошибки OTel текут в стандартный лог Unit.</li></ul>
+<h2>🛠 Багфиксы</h2>
+<ul><li><strong>Go port-fd double-close:</strong> getUnixConn() дублировал fd через net.FileConn, а отложенный Close() закрывал оригинальный дескриптор — гонка с libunit, EBADF. Исправлено.</li><li><strong>Cgroup.procs path bounds:</strong> snprintf возврат перезаписывал длину до проверки — переполнение при длинных путях. Теперь ENAMETOOLONG.</li><li><strong>Cgroup directory leak:</strong> при OOM аллокации пула — созданная директория теперь удаляется, а не остаётся сиротой.</li><li><strong>Proxy keepalive:</strong> после дублированного или некорректного Content-Length downstream keepalive остаётся выключенным — клиент не переиспользует соединение за пересобранным ответом.</li><li><strong>Static NUL/empty paths:</strong> reject в templated share и chroot путях.</li><li><strong>Controller conn tracking:</strong> целостный трекинг соединений и полная очистка на failure paths.</li><li><strong>H1 buffer chain:</strong> завершение хвоста buf chain, оторванного trim-ом Content-Length.</li></ul>
+<h2>📦 Пакетирование и инфраструктура</h2>
+<ul><li><strong>Debian rebrand:</strong> весь пакетный набор — <code>freeunit</code>, <code>freeunit-dev</code>, <code>freeunit-php8.x</code>, <code>freeunit-python3.x</code>, <code>freeunit-perl</code>, <code>freeunit-go</code>, <code>freeunit-wasm</code>, <code>freeunit-jscNN</code>. Демон: <code>/usr/sbin/freeunitd</code>, сокет: <code>control.freeunit.sock</code>.</li><li><strong>njs:</strong> апгрейд contrib до 1.0.0.</li><li><strong>CI:</strong> ASan+UBSan срез по lifecycle + runtime, seccomp и clang-ast gates.</li><li><strong>Docker:</strong> обновлённые Dockerfile под 1.36.0.</li></ul>
+<hr>
+<h2>🔽 Установка</h2>
+<pre><code>docker pull freeunitorg/freeunit:1.36.0
+docker pull ghcr.io/freeunitorg/freeunit:1.36.0</code></pre>
+<p>Deb-пакеты: <code>https://packages.freeunit.org</code></p>
+<p>Репозиторий: <a href="https://github.com/freeunitorg/freeunit">github.com/freeunitorg/freeunit</a></p>
+<script src="/freeunit-kb/assets/kb.js"></script>
+</body></html>

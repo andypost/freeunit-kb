@@ -1,0 +1,207 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>engineering/telemetry-status-reference</title>
+<link rel="stylesheet" href="/freeunit-kb/assets/kb.css">
+</head><body>
+<nav class="crumbs"><a href="/freeunit-kb/index.html">index</a> / engineering/telemetry-status-reference</nav>
+
+<h1>engineering/telemetry-status-reference</h1>
+
+<h1>FreeUnit Telemetry &amp; Status — Read &amp; Configure</h1>
+<h2>1. What You Can Read (Observability Surfaces)</h2>
+<h3>1.1 Control API: GET /status</h3>
+<pre><code>GET /status                      → router-level stats
+GET /status/connections/&lt;id&gt;     → per-connection stats
+GET /status/applications/&lt;name&gt;  → per-app stats</code></pre>
+<p><strong>Router-level response (nxt_router_status_handler, src/nxt_router.c:955):</strong></p>
+<pre><code class="language-json">{
+  &quot;accepted_conns&quot;: 1234567,
+  &quot;idle_conns&quot;: 48,
+  &quot;closed_conns&quot;: 1234519,
+  &quot;active_conns&quot;: 89,
+  &quot;requests&quot;: 5432100,
+  &quot;applications&quot;: {
+    &quot;drupal&quot;: {
+      &quot;processes&quot;: 8,
+      &quot;idle_processes&quot;: 3,
+      &quot;active_requests&quot;: 5,
+      &quot;pending_processes&quot;: 0
+    }
+  }
+}</code></pre>
+<p><strong>Field meanings:</strong></p>
+<table><thead><tr><th>Field</th><th>Source</th><th>Meaning</th></tr></thead><tbody><tr><td><code>accepted_conns</code></td><td><code>engine-&gt;accepted_conns_cnt</code></td><td>Total accepts since start (monotonic)</td></tr><tr><td><code>idle_conns</code></td><td><code>engine-&gt;idle_conns_cnt</code></td><td>Keep-alive connections waiting for next request</td></tr><tr><td><code>active_conns</code></td><td>Calculated</td><td>Connections currently being processed</td></tr><tr><td><code>closed_conns</code></td><td><code>engine-&gt;closed_conns_cnt</code></td><td>Total closed since start</td></tr><tr><td><code>requests</code></td><td><code>engine-&gt;requests_cnt</code></td><td>Total HTTP requests since start</td></tr><tr><td><code>processes</code></td><td><code>app-&gt;processes</code></td><td>Configured worker count</td></tr><tr><td><code>idle_processes</code></td><td><code>app-&gt;idle_processes</code></td><td>Workers waiting for requests</td></tr><tr><td><code>active_requests</code></td><td><code>app-&gt;active_requests</code></td><td>Currently executing in workers</td></tr><tr><td><code>pending_processes</code></td><td><code>app-&gt;pending_processes</code></td><td>Starting up (not yet ready)</td></tr></tbody></table>
+<p><strong>Quick health check:</strong></p>
+<pre><code>OK:   idle_processes &gt; 0                → room to accept
+WARN: idle_processes = 0, active &lt; max  → fully loaded
+CRIT: idle_processes = 0, active = max  → queue building, will 503</code></pre>
+<h3>1.2 Control API: GET /config</h3>
+<p>Returns the full active configuration as JSON:</p>
+<pre><code>GET /config
+→ { &quot;listeners&quot;: {...}, &quot;applications&quot;: {...}, &quot;access_log&quot;: &quot;...&quot; }</code></pre>
+<h3>1.3 Access Log</h3>
+<pre><code class="language-json">{
+  &quot;access_log&quot;: {
+    &quot;path&quot;: &quot;/var/log/unit/access.log&quot;,
+    &quot;format&quot;: &quot;$remote_addr - $time_local \&quot;$request\&quot; $status $body_bytes_sent&quot;
+  }
+}</code></pre>
+<p>Pre-defined format or custom template. No stdout/stderr — file-only.</p>
+<h3>1.4 Error Log</h3>
+<p>Not controllable via Control API. Configured at unit start:</p>
+<pre><code>unitd --log /var/log/unit/error.log</code></pre>
+<p>Errors write through <code>nxt_log()</code> → <code>nxt_log_file_handler()</code> → append to file. Levels: <code>alert</code>, <code>error</code>, <code>warn</code>, <code>info</code>, <code>debug</code>.</p>
+<h3>1.5 OpenTelemetry Spans</h3>
+<p><strong>What's exported (to OTLP collector):</strong></p>
+<p>For every HTTP request, one span with:</p>
+<ul><li><code>http.method</code> = GET/POST/...</li><li><code>http.scheme</code> = http/https</li><li><code>http.target</code> = /index.php?q=node/1</li><li><code>http.host</code> = example.com</li><li><code>http.status_code</code> = 200/404/500</li><li><code>http.route</code> = matched route pattern</li><li><code>net.host.name</code> = listener host</li><li><code>net.host.port</code> = listener port</li><li><code>net.peer.ip</code> / <code>net.peer.port</code> = client address</li></ul>
+<p>Plus for PHP:</p>
+<ul><li><code>app.type</code> = "php"</li><li><code>app.version</code> = "8.5.7"</li></ul>
+<p><strong>Span lifecycle:</strong></p>
+<pre><code>Request received:
+  → nxt_otel_start_span(&quot;HTTP GET&quot;)
+  → set attributes from parsed headers
+  → check W3C traceparent (inherit or restart)
+
+Request during processing:
+  → span stays open
+  → worker events: request_start, processing
+
+Response ready:
+  → nxt_otel_set_status(200)
+  → nxt_otel_end_span()
+  → export via batch span processor
+  → OTLP/HTTP (POST /v1/traces) or OTLP/gRPC
+
+Connection close:
+  → span already exported (no connection tracking in span)</code></pre>
+<p><strong>What you DON'T get:</strong></p>
+<ul><li>❌ No per-worker metrics (no worker_id in span)</li><li>❌ No DB query spans (no PHP extension integration)</li><li>❌ No response body metrics</li><li>❌ No TCP/TLS handshake timing</li></ul>
+<h3>1.6 cgroup stats (per-worker, Linux only)</h3>
+<p>Worker process isolation: cgroup files readable at runtime.</p>
+<pre><code>/sys/fs/cgroup/freeunit/drupal/worker-3/
+  ├─ memory.current       → RSS in bytes
+  ├─ memory.max           → configured limit
+  ├─ cpu.stat             → usage_usec, user_usec, system_usec
+  ├─ pids.current         → threads in this worker
+  └─ cgroup.procs         → pids in this cgroup</code></pre>
+<p>Accessible from host or container (with capabilities), not via Unit API directly.</p>
+<hr>
+<h2>2. What You Can Configure (Control Surface)</h2>
+<h3>2.1 PUT /config — Full Config Replace</h3>
+<pre><code>PUT /config
+{
+  &quot;listeners&quot;: {...},
+  &quot;applications&quot;: {...},
+  &quot;access_log&quot;: &quot;...&quot;,
+  &quot;settings&quot;: {
+    &quot;telemetry&quot;: {
+      &quot;service_name&quot;: &quot;FreeUnit&quot;,
+      &quot;protocol&quot;: &quot;http&quot;,
+      &quot;endpoint&quot;: &quot;http://otel-collector:4318/v1/traces&quot;,
+      &quot;batch_size&quot;: 512,
+      &quot;sampling_ratio&quot;: 0.1
+    }
+  }
+}</code></pre>
+<h3>2.2 POST /control/applications/&lt;name&gt;/restart</h3>
+<p>Graceful restart of all workers for an app:</p>
+<pre><code>POST /control/applications/drupal/restart
+→ spawns new workers, drains old ones
+→ zero-downtime: old workers finish in-flight requests, new ones take new
+→ not a full /config reload (only one app, no listener changes)</code></pre>
+<h3>2.3 GET /control/certificates</h3>
+<pre><code>GET /control/certificates
+→ lists loaded TLS certificates (names, not contents)</code></pre>
+<h3>2.4 PUT /control/certificates/&lt;name&gt;</h3>
+<p>Upload/update TLS bundle:</p>
+<pre><code>PUT /control/certificates/example
+{
+  &quot;cert&quot;: &quot;-----BEGIN CERTIFICATE-----...&quot;,
+  &quot;key&quot;: &quot;-----BEGIN PRIVATE KEY-----...&quot;
+}
+→ validates key matches cert at upload time (1.36.0+)</code></pre>
+<hr>
+<h2>3. Telemetry Configuration Reference</h2>
+<pre><code class="language-json">{
+  &quot;settings&quot;: {
+    &quot;telemetry&quot;: {
+      &quot;service_name&quot;: &quot;FreeUnit&quot;,           // default: &quot;FreeUnit&quot; (was &quot;NGINX Unit&quot;)
+      &quot;protocol&quot;: &quot;http&quot;,                   // &quot;http&quot; (OTLP/HTTP) or &quot;grpc&quot; (OTLP/gRPC)
+      &quot;endpoint&quot;: &quot;http://localhost:4318&quot;,  // collector address
+                                             // HTTP: POST /v1/traces
+                                             // gRPC: tonic over h2c (plaintext only)
+      &quot;batch_size&quot;: 512,                    // spans per batch (1-65536)
+      &quot;sampling_ratio&quot;: 0.1,               // 0.0 = none, 1.0 = all (0-1)
+      &quot;export_timeout_millis&quot;: 10000        // timeout for collector connection
+    }
+  }
+}</code></pre>
+<p><strong>Defaults and constraints:</strong></p>
+<table><thead><tr><th>Param</th><th>Default</th><th>Min</th><th>Max</th><th>Note</th></tr></thead><tbody><tr><td>service_name</td><td>"FreeUnit"</td><td>—</td><td>—</td><td>Must be non-empty</td></tr><tr><td>protocol</td><td>"http"</td><td>—</td><td>—</td><td>"http" or "grpc"</td></tr><tr><td>batch_size</td><td>512</td><td>1</td><td>65536</td><td>Invalid values: error at config load (1.36.0+)</td></tr><tr><td>sampling_ratio</td><td>1.0</td><td>0</td><td>1</td><td>ParentBased sampler — remote parent flags honoured (1.36.0+)</td></tr><tr><td>export_timeout_millis</td><td>10000</td><td>—</td><td>—</td><td>Connection timeout to collector</td></tr></tbody></table>
+<p><strong>Build flag:</strong> <code>--otel</code> required at configure time. Both HTTP and gRPC transports compiled in.</p>
+<hr>
+<h2>4. Prometheus /metrics (Roadmap X8, NOT shipped)</h2>
+<p>Not yet implemented. Planned: X8 in roadmap.</p>
+<pre><code>GET /metrics   # → Planned for month 6
+  # HELP freeunit_connections_accepted_total Total accepted connections
+  # TYPE freeunit_connections_accepted_total counter
+  freeunit_connections_accepted_total 1234567
+
+  # HELP freeunit_requests_total Total requests
+  # TYPE freeunit_requests_total counter
+  freeunit_requests_total{app=&quot;drupal&quot;} 5421000
+
+  # HELP freeunit_worker_active Current active workers
+  # TYPE freeunit_worker_active gauge
+  freeunit_worker_active{app=&quot;drupal&quot;} 5
+
+  # HELP freeunit_worker_idle Current idle workers
+  # TYPE freeunit_worker_idle gauge
+  freeunit_worker_idle{app=&quot;drupal&quot;} 3</code></pre>
+<hr>
+<h2>5. Health Check Endpoints (Application-Level)</h2>
+<p>Unit apps can expose health checks as normal HTTP routes:</p>
+<pre><code class="language-json">{
+  &quot;listeners&quot;: {
+    &quot;*:8080&quot;: {
+      &quot;pass&quot;: &quot;routes/main&quot;
+    }
+  },
+  &quot;routes&quot;: {
+    &quot;main&quot;: [
+      {
+        &quot;match&quot;: { &quot;uri&quot;: &quot;/health&quot; },
+        &quot;action&quot;: { &quot;return&quot;: 200 }
+      },
+      {
+        &quot;action&quot;: { &quot;pass&quot;: &quot;applications/drupal&quot; }
+      }
+    ]
+  }
+}</code></pre>
+<p>Plan: <code>/status/applications/&lt;name&gt;/php</code> (roadmap P2) — opcache stats, JIT state, request counters.</p>
+<hr>
+<h2>6. Live Debug Flow</h2>
+<pre><code>What&#x27;s happening right now?
+
+1. GET /status                                     ← top-level: connections, apps
+2. GET /status/connections                         ← per-connection: who&#x27;s connected
+3. GET /status/applications/drupal                 ← drupal: workers, queue
+4. ps aux | grep unit                              ← OS level: pids, RSS, CPU
+5. cat /sys/fs/cgroup/freeunit/drupal/*/cpu.stat    ← cgroup: per-worker CPU
+6. cat /sys/fs/cgroup/freeunit/drupal/*/memory.current  ← cgroup: per-worker RAM
+7. OTLP collector dashboard                        ← spans: latency, errors, sampling
+8. Access log tail -f                              ← request log: timing, status codes
+
+Typical incident flow:
+  /status → active = max, idle = 0 → all workers busy
+  Check OTLP spans → DB queries taking 5s (not Unit&#x27;s fault)
+  Check access log → 502 errors from upstream timeout
+  Decision: increase processes or fix the DB</code></pre>
+<hr>
+<h2>7. Comparison: What you can see now vs roadmap</h2>
+<table><thead><tr><th>Feature</th><th>Now</th><th>Planned</th><th>When</th></tr></thead><tbody><tr><td>Router-level stats</td><td>✅ GET /status</td><td>—</td><td>—</td></tr><tr><td>Connection-level stats</td><td>✅ GET /status/connections</td><td>—</td><td>—</td></tr><tr><td>Per-app worker stats</td><td>✅ processes/idle/active</td><td>—</td><td>—</td></tr><tr><td>Access logs</td><td>✅ File</td><td>✅ Structured JSON (D8)</td><td>Month 2</td></tr><tr><td>Error logs</td><td>✅ File (--log)</td><td>✅ Same (stable)</td><td>—</td></tr><tr><td>OTLP spans</td><td>✅ HTTP+gRPC 0.32</td><td>—</td><td>—</td></tr><tr><td>Prometheus /metrics</td><td>❌</td><td>✅ X8</td><td>Month 6</td></tr><tr><td>PHP opcache stats</td><td>❌</td><td>✅ P2 (Status API)</td><td>Month 2</td></tr><tr><td>Per-worker CPU/RAM (API)</td><td>❌ (cgroup files only)</td><td>✅ P2 extension</td><td>Month 2</td></tr><tr><td>Graceful reload</td><td>❌</td><td>✅ X3</td><td>Month 2</td></tr><tr><td>Structured logs</td><td>❌</td><td>✅ D8</td><td>Month 2</td></tr><tr><td>Request-level timing</td><td>❌ (only spans)</td><td>✅ Span annotations</td><td>Month 6</td></tr></tbody></table>
+<script src="/freeunit-kb/assets/kb.js"></script>
+</body></html>

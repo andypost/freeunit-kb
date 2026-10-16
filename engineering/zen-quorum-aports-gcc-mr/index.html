@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>engineering/zen-quorum-aports-gcc-mr</title>
+<link rel="stylesheet" href="/freeunit-kb/assets/kb.css">
+</head><body>
+<nav class="crumbs"><a href="/freeunit-kb/index.html">index</a> / engineering/zen-quorum-aports-gcc-mr</nav>
+
+<h1>engineering/zen-quorum-aports-gcc-mr</h1>
+
+<h1>zen-quorum: aports gcc MR (main/gcc 16.2.0) — 2026-09-03</h1>
+<p>_Author andypost — Draft MR. Task: what to do with a draft gcc major-bump MR._</p>
+<h2>Ground truth (gathered)</h2>
+<table><thead><tr><th>fact</th><th>value</th></tr></thead><tbody><tr><td>gcc 16.2.0 version</td><td><strong>CURRENT</strong> (no 16.3; released 7 Aug 2026) — version NOT stale</td></tr><tr><td>aports master</td><td>gcc <strong>15.2.0</strong> → MR is a major bump 15→16</td></tr><tr><td>MR state</td><td>Draft, opened 30 Apr, last updated <strong>8 Aug</strong> (day after 16.2.0)</td></tr><tr><td>engagement</td><td>0 upvotes, 0 downvotes, no reviewers, merge_status=<code>cannot_be_merged_recheck</code> (draft)</td></tr><tr><td>files</td><td>APKBUILD + 9 musl/LoongArch/libsanitizer/ada patches</td></tr><tr><td><strong>"stale" meaning</strong></td><td>ACTIVITY (a month of silence), NOT the version</td></tr></tbody></table>
+<h2>Opinion window (2 models)</h2>
+<table><thead><tr><th>model</th><th>latent</th><th>verdict</th><th>rationale</th></tr></thead><tbody><tr><td>laguna-s-2.1-free</td><td>15s (37s)</td><td><strong>C</strong> (close/abandon)</td><td>"stale (no activity/votes/reviewers since 8 Aug), lacks integration progress"; a core compiler draft with no reviewer engagement = integration/stability risk</td></tr><tr><td>ling-3.0-flash-fin-free</td><td>31s</td><td>D → (no clean letter)</td><td>"version is current (not version-stale), but draft, zero reviews, major 15→16 bump needs active updating + review prep before merge" — reads as B (revive), not C</td></tr><tr><td>consensus</td><td>—</td><td>—</td><td><strong>DIVERGENT on the action</strong> (C close vs B revive) but ALIGNED on: version is fine, the MR-as-draft is the problem</td></tr></tbody></table>
+<h2>Interpretation</h2>
+<ul><li>Both models agree: <strong>gcc 16.2.0 version is correct</strong> — do NOT downgrade / it is not stale by version.</li><li>Both agree the <strong>draft-with-no-engagement is the real issue</strong> (a month silent, no reviewers, major bump).</li><li>They split on remedy: laguna → <strong>C (close)</strong>, ling → imply <strong>B (revive + prepare)</strong>.</li><li>This is exactly the DIVERGENT case: do not let one model decide. The human (Andrey) is the author — only he knows if the gcc 16 work is abandoned or just blocked.</li></ul>
+<h2>Recommendation (hypothesis, not verdict)</h2>
+<p>Given a <strong>major toolchain bump</strong> (gcc 15→16) sits in a <strong>draft with zero engagement</strong> and the author is the one who can tell if it's live, the honest path is: <strong>ask Andrey</strong> whether the gcc 16 work is still active. If yes → revive (B): refresh against current master, resolve the merge-recheck, solicit a reviewer. If no → close (C) to avoid a stale draft misleading others. Don't auto-close an author's dormant draft on model opinion alone.</p>
+<h2>Next step</h2>
+<p>The weekly <code>aports MR weekly (andypost)</code> cron (Sat 09:30 UTC) already surfaces this MR as draft. Escalating it to Andrey is the correct action, not a model verdict.</p>
+<script src="/freeunit-kb/assets/kb.js"></script>
+</body></html>

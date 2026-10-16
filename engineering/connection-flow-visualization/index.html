@@ -1,0 +1,317 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>engineering/connection-flow-visualization</title>
+<link rel="stylesheet" href="/freeunit-kb/assets/kb.css">
+</head><body>
+<nav class="crumbs"><a href="/freeunit-kb/index.html">index</a> / engineering/connection-flow-visualization</nav>
+
+<h1>engineering/connection-flow-visualization</h1>
+
+<h1>FreeUnit Connection Flow — Full Visualization</h1>
+<h2>Architecture Overview</h2>
+<pre><code>                                    ┌─────────────────┐
+                                    │  nxt_main_process │  (root, config, lifecycle)
+                                    └────────┬──────────┘
+                                             │ fork
+                         ┌───────────────────┼───────────────────┐
+                         ▼                   ▼                   ▼
+                  ┌──────────┐        ┌──────────┐        ┌──────────┐
+                  │Controller│        │  Router  │        │  Worker  │  × N
+                  │ (REST)   │        │ (HTTP)   │        │ (PHP/...)│
+                  └──────────┘        └────┬─────┘        └────┬─────┘
+                                           │                   │
+                                      UDS port IPC         UDS port IPC
+                                    (nxt_port_socket)     (nxt_port_socket)
+                                           │                   │
+                                      mmap shared         mmap shared
+                                    (nxt_port_memory)    (nxt_port_memory)</code></pre>
+<hr>
+<h2>Step-by-Step: One HTTP Request</h2>
+<h3>Phase 1: Accept (router, ~50µs)</h3>
+<pre><code>LISTENER (epoll fd)                        ROUTER
+     │                                        │
+     │  epoll_wait → EPOLLIN on listen fd     │
+     │──────────────────────────────────────➤│
+     │                                        │ nxt_conn_accept()
+     │                                        │ → accept4(listen_fd, SOCK_NONBLOCK)
+     │                                        │ → new conn_fd = 42
+     │                                        │ → nxt_conn_t c = { .fd = 42,
+     │                                        │     .read = nxt_h1p_conn_read }
+     │                                        │
+     │                                        │ nxt_event_engine_add(ev, conn_fd)
+     │                                        │ → epoll_ctl(EPOLL_CTL_ADD, 42, EPOLLIN|EPOLLRDHUP)
+     │                                        │
+     │                                        │ c-&gt;state = NXT_CONN_ACCEPTED
+     │                                        │ → ready_handler = nxt_h1p_request_header_read</code></pre>
+<h3>Phase 2: Read &amp; Parse Headers (router, ~200µs for typical request)</h3>
+<pre><code>CLIENT                                    ROUTER (h1proto)
+     │                                        │
+     │  GET /index.php HTTP/1.1               │
+     │  Host: example.com                     │
+     │  Content-Length: 42                    │
+     │──────────────────────────────────────➤│ epoll_wait → EPOLLIN on conn_fd=42
+     │                                        │    ↓
+     │                                        │ nxt_h1p_conn_read(c)
+     │                                        │   → recv(42, c-&gt;read.buf, 4096) → 120 bytes
+     │                                        │    ↓
+     │                                        │ nxt_http_parse_request(buf, 120)
+     │                                        │   → method = GET
+     │                                        │   → target = /index.php
+     │                                        │   → version = HTTP/1.1
+     │                                        │   → headers parsed: 3 headers
+     │                                        │    ↓
+     │                                        │ nxt_h1p_request_header_ready(r)</code></pre>
+<h3>Phase 3: Route Match (router, ~10µs)</h3>
+<pre><code>     │                                        │
+     │                                        │ nxt_http_route_find(r, &quot;/index.php&quot;)
+     │                                        │   → location match: &quot;*.php&quot;
+     │                                        │   → app_name = &quot;drupal&quot;
+     │                                        │   → action = proxy → app worker
+     │                                        │    ↓
+     │                                        │ r-&gt;app = drupal_app
+     │                                        │ r-&gt;app-&gt;type = NXT_APP_PHP</code></pre>
+<h3>Phase 4: Select Worker (router, ~5µs)</h3>
+<pre><code>     │                                        │
+     │                                        │ nxt_router_app_process_select(app)
+     │                                        │   → round-robin over app-&gt;workers[]
+     │                                        │   → selected: worker #3, pid = 12345
+     │                                        │    ↓
+     │                                        │ worker = &amp;app-&gt;workers[3]
+     │                                        │ port  = worker-&gt;app_port  (UDS socket pair)</code></pre>
+<h3>Phase 5: IPC Send Request → Worker (router → worker, ~20µs small, ~200µs with mmap)</h3>
+<pre><code>ROUTER                                    IPC                            WORKER
+     │                                      │                                │
+     │ nxt_router_app_process_request()     │                                │
+     │   ↓                                  │                                │
+     │ Build message header:                │                                │
+     │   nxt_port_send_msg_t msg = {        │                                │
+     │     .type = NXT_PORT_MSG_DATA,       │                                │
+     │     .stream = request_id,            │                                │
+     │     .pid = router_pid                │                                │
+     │   }                                  │                                │
+     │   ↓                                  │                                │
+     │ Body ≤ 64KB?                         │                                │
+     │   ┌─ YES ─ write(sock_fd, msg+body)──➤ UDS packet (single write)───➤│
+     │   │                                  │  ↓                             │
+     │   │                                  │  nxt_port_read_msg()           │
+     │   │                                  │  → read(sock_fd) → msg+body   │
+     │   │                                  │                                │
+     │   └─ NO ─ nxt_port_mmap_write()      │                                │
+     │             ↓                        │                                │
+     │          mmap(NULL, body_size,        │                                │
+     │               PROT_READ|PROT_WRITE,   │                                │
+     │               MAP_SHARED,             │                                │
+     │               mem_fd, offset)         │                                │
+     │             ↓                        │                                │
+     │          memcpy(shm, body)            │                                │
+     │             ↓                        │                                │
+     │          write(sock_fd,               │                                │
+     │            msg + mmap_header)  ─────➤│  → mmap(same_fd, same_off)     │
+     │          (tiny: ~64 bytes)            │    → worker reads from SHM     │
+     │                                      │                                │
+     │                                      │    nxt_unit_run()              │
+     │                                      │    → dispatch to language      │
+     │                                      │      ↓                         │</code></pre>
+<h3>Phase 6: Worker Processing (PHP worker, ~50ms for Drupal, ~2ms for "hello world")</h3>
+<pre><code>                                        WORKER (PHP SAPI)
+                                             │
+                                             │ nxt_php_setup() [one-time at boot]
+                                             │   → tsrm_startup()
+                                             │   → php_module_startup()
+                                             │   → opcache.enable = 1
+                                             │
+                                             │ nxt_php_request_handler(r)
+                                             │   ↓
+                                             │ Build $_SERVER:
+                                             │   REQUEST_METHOD = GET
+                                             │   REQUEST_URI    = /index.php
+                                             │   HTTP_HOST      = example.com
+                                             │   CONTENT_LENGTH = 42
+                                             │   ↓
+                                             │ php_request_startup()
+                                             │   ↓
+                                             │ zend_execute_scripts(index.php)
+                                             │   → autoloader
+                                             │   → DrupalKernel::handle()
+                                             │   → routing
+                                             │   → controller
+                                             │   → Response: 200 OK, HTML body
+                                             │   ↓
+                                             │ php_request_shutdown()
+                                             │   → flush output
+                                             │   → close session</code></pre>
+<h3>Phase 7: IPC Send Response → Router (worker → router, ~20µs small)</h3>
+<pre><code>WORKER                                    IPC                            ROUTER
+     │                                      │                                │
+     │ nxt_unit_response_send(r)            │                                │
+     │   ↓                                  │                                │
+     │ Write response through port:         │                                │
+     │   write(sock_fd,                     │                                │
+     │     msg(type=DATA, stream=req_id)    │                                │
+     │     + status_line                    │                                │
+     │     + headers                        │                                │
+     │     + body)                   ──────➤│ read(sock_fd) ─────────────➤   │
+     │                                      │  ↓                             │
+     │                                      │ nxt_router_response_ready()    │
+     │                                      │  → r = pending[req_id]         │
+     │                                      │  → r-&gt;state = RESPONSE_READY   │</code></pre>
+<h3>Phase 8: Write Response → Client (router, ~50µs)</h3>
+<pre><code>                                             │
+                                             │ nxt_h1p_response_send(r)
+                                             │   ↓
+                                             │ Build HTTP response:
+                                             │   HTTP/1.1 200 OK
+                                             │   Content-Type: text/html
+                                             │   Content-Length: 12345
+                                             │   Connection: keep-alive
+                                             │    ↓
+                                             │ nxt_conn_write(c, buf)
+                                             │   → writev(conn_fd, iov, iovcnt)
+                                             │     iov[0] = status_line
+                                             │     iov[1] = headers
+                                             │     iov[2] = body (mmap or socket)
+                                             │
+CLIENT                                       │
+     │  HTTP/1.1 200 OK                      │
+     │  Content-Type: text/html              │
+     │  Content-Length: 12345               │
+     │←──────────────────────────────────────│
+     │  [HTML body: 12345 bytes]            │
+     │←──────────────────────────────────────│</code></pre>
+<hr>
+<h2>Complete Timeline (Drupal — index.php, warm opcache)</h2>
+<pre><code>Time (µs)   Event                                    Component
+─────────────────────────────────────────────────────────────────
+   0        epoll_wait returns EPOLLIN on listen fd   Router
+  10        accept4() → new fd = 42                   Router
+  20        epoll_ctl(ADD, 42)                        Router
+  50        epoll_wait returns EPOLLIN on fd = 42     Router
+  60        recv(42) → 120 bytes (request line)       Router  
+ 150        HTTP parse → GET /index.php               Router
+ 160        Route match → drupal app, PHP worker #3   Router
+ 170        Build nxt_port_send_msg_t                 Router
+ 190        write(uds_fd, msg_header + body)          IPC
+ 210        read(uds_fd) → msg received               Worker
+ 220        nxt_unit_run → dispatch to language       Worker (libunit)
+  ─────────────────── PHP SAPI boundary ───────────────────
+ 230        Build $_SERVER arrays                     PHP SAPI
+ 250        php_request_startup()                     PHP
+ 300        zend_execute_scripts(index.php)            PHP
+ 400        Composer autoloader → DrupalKernel        PHP
+ 500        DrupalKernel::boot() [WARM — opcache hit] PHP
+           → container, routing, event dispatcher
+ 800        DrupalKernel::handle(request)             PHP  
+           → routing match
+ 1200       Controller::__invoke()                    PHP
+ 15000      DB query: SELECT nid, title FROM node     PHP → MySQL
+  ──────────────────────── TCP RTT (0.5ms) ────────────────────────
+ 15500      DB returns 10 rows                        PHP
+ 16000      Build render array, theme layer           PHP
+ 45000      RenderResponse → HTML string (5KB)        PHP
+ 45100      php_request_shutdown()                    PHP
+  ─────────────────── back to C layer ───────────────────
+ 45200      nxt_unit_response_send()                  Worker (libunit)
+ 45220      write(uds_fd, status + headers + body)    IPC
+ 45240      read(uds_fd) → response received          Router
+ 45250      nxt_router_response_ready()               Router
+ 45280      nxt_h1p_response_send()                   Router
+ 45300      writev(42, [status_line, headers, body])  Router
+ 45320      epoll_wait returns EPOLLOUT on fd = 42    Router
+ 45350      All bytes sent → complete                 Router
+ 45380      Connection: keep-alive → stay in epoll    Router
+
+Total: ~45ms wall-clock for a Drupal &quot;hello&quot; page
+Router overhead: ~0.38ms (&lt; 1%)
+PHP overhead: ~44ms (&gt; 98%)
+IPC overhead: ~0.04ms (&lt; 0.1%)</code></pre>
+<hr>
+<h2>Memory Layout During Request</h2>
+<pre><code>ROUTER PROCESS                   │  WORKER PROCESS (PHP)
+                                 │
+nxt_conn_t (conn_fd=42)         │  nxt_unit_ctx_t
+ ├─ fd = 42                    │   ├─ port_fd  ← UDS socket to router
+ ├─ read buf (4KB stack)        │   ├─ shm_fd   ← mmap shared with router
+ ├─ write buf (8KB)             │   ├─ req_buf  ← incoming request
+ └─ state = ACTIVE              │   └─ resp_buf ← outgoing response
+                                 │
+nxt_http_request_t (req_id=7)   │  PHP
+ ├─ method = GET                 │   ├─ $_SERVER[] → request metadata
+ ├─ target = &quot;/index.php&quot;        │   ├─ $_GET[]    → query params
+ ├─ headers → linked list       │   ├─ $_POST[]   → body (if POST)
+ ├─ app → drupal_app             │   ├─ $_COOKIE[] → cookies
+ ├─ port_msg.pid → worker pid    │   └─ ob buffer  → response output
+ └─ conn_fd = 42               │
+                                 │
+PORT (nxt_port_socket.c)        │  PORT (libunit)
+ ├─ fd → UDS socket pair        │   └─ fd → same UDS socket pair
+ ├─ type = APP_PORT             │
+ └─ queue → pending messages    │
+                                 │
+SHARED MEMORY (mmap)             │  SAME SHARED MEMORY (mmap)
+ ├─ fd = mem_fd                 │   └─ fd = mem_fd  (MAP_SHARED)
+ ├─ offset chunk_id              │      └─ virt_addr → same physical pages
+ └─ size = body_size             │</code></pre>
+<hr>
+<h2>Key Data Structure Transitions</h2>
+<pre><code>nxt_conn_t                    nxt_http_request_t
+      │ (accept)                        │ (parse complete)
+      ▼                                 ▼
+nxt_h1proto_t              nxt_router_app_process_t
+      │ (route match)                   │ (worker selected)
+      ▼                                 ▼
+nxt_app_t                   nxt_port_send_msg_t
+      │ (IPC dispatch)                  │ (UDS write)
+      ▼                                 ▼
+waiting for worker            nxt_unit_ctx_t (worker side)
+      │ (response ready)                │ (PHP handler)
+      ▼                                 ▼
+nxt_router_response_ready()   nxt_unit_response_t
+      │ (headers + body)               │ (UDS write back)
+      ▼                                 ▼
+nxt_conn_write()              router receives response
+      │ (writev to client)             │ (match request_id)
+      ▼                                 ▼
+client sees HTTP/1.1 200 OK   request_id freed, port queue slot freed</code></pre>
+<hr>
+<h2>Concurrency: 100 simultaneous requests</h2>
+<pre><code>LISTENER (epoll)
+  │
+  ├─ conn_fd=42 → req_id=7  → worker #3 (processing)
+  ├─ conn_fd=43 → req_id=8  → worker #1 (processing)
+  ├─ conn_fd=44 → req_id=9  → worker #5 (processing)
+  ├─ conn_fd=45 → req_id=10 → waiting (all workers busy)
+  ├─ conn_fd=46 → req_id=11 → waiting
+  └─ conn_fd=47 → req_id=12 → waiting
+
+Router:
+  pending[req_id] → { events: tx, claimed_by: worker_id, body: rx }
+
+Worker #3:
+  req_id=7 → PHP handler running → 15ms left
+  req_id=14 → waiting in port queue
+
+Port queue (libunit):
+  worker #1: [req_id=8]                 ← single request in flight
+  worker #3: [req_id=7, req_id=14]      ← backlog
+  worker #5: [req_id=9]                 ← single request in flight
+
+Idle workers: worker #2, #4, #6, #7, #8 ← will pick req_id=10-12</code></pre>
+<hr>
+<h2>Bottlenecks (what takes time)</h2>
+<pre><code>Component             Time (typical Drupal)     Optimization
+────────────────────────────────────────────────────────────
+TCP accept              10 µs                   io_uring ACCEPT (Stage 2)
+HTTP parse              90 µs                   pre-parse header cache
+Route match              5 µs                   route table hash (already fast)
+IPC send (small)        20 µs                   — negligible
+IPC send (5MB upload)  200 µs + memcpy          body streaming (zero memcpy)
+PHP boot (cold)       50 ms × N workers         Prototype + fork (once)
+PHP boot (warm)         0 µs                    — P4 persistent worker
+PHP handler          10–50 ms                   opcache + DB caching
+DB query              0.5–5 ms                  connection pooling
+IPC send response      20 µs                    — negligible
+writev to client       30 µs + TCP TX            send_zc (zero-copy)</code></pre>
+<p><strong>Takeaway:</strong> PHP handler dominates (98%), IPC is negligible (&lt;0.1%), HTTP parse is &lt;1%. Main wins: persistent workers (remove cold boot), opcache prototype+fork (share once), DB connection pooling (remove TCP per request).</p>
+<script src="/freeunit-kb/assets/kb.js"></script>
+</body></html>

@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>engineering/ipc-ports-architecture</title>
+<link rel="stylesheet" href="/freeunit-kb/assets/kb.css">
+</head><body>
+<nav class="crumbs"><a href="/freeunit-kb/index.html">index</a> / engineering/ipc-ports-architecture</nav>
+
+<h1>engineering/ipc-ports-architecture</h1>
+<table class="meta"><tr><th>created</th><td>2026-08-22</td></tr><tr><th>source</th><td>code walk (src/nxt_port*.c/h), PR #208-#212 context</td></tr><tr><th>purpose</th><td>How internal IPC ports work, transports, lifecycle, security</td></tr></table>
+<h1>FreeUnit IPC Ports — Architecture Reference</h1>
+<p><strong>Created:</strong> 2026-08-22 <strong>Source:</strong> code walk (src/nxt_port*.c/h), PR #208-#212 context <strong>Purpose:</strong> How internal IPC ports work, transports, lifecycle, security boundary. Reference for review and porting discussions.</p>
+<hr>
+<h2>What a port is</h2>
+<p><code>nxt_port_t</code> — a <strong>socketpair channel between two processes</strong> plus a shared-memory message queue. Every process in the system (main, controller, router, prototype, worker) holds ports to its neighbours.</p>
+<pre><code>main ←→ controller
+main ←→ router (socketpair + queue)
+router ←→ prototype ←→ worker</code></pre>
+<h2>Two transport layers</h2>
+<h3>1. Small messages — Unix SOCK_DGRAM + SCM_RIGHTS</h3>
+<p><code>nxt_port_send_msg_t</code> via <code>sendmsg()</code>:</p>
+<pre><code class="language-c">typedef struct {
+    nxt_buf_t        *buf;      /* payload */
+    nxt_fd_t         fd[2];     /* up to 2 descriptors via SCM_RIGHTS */
+    nxt_port_msg_t   port_msg;  /* header */
+} nxt_port_send_msg_t;</code></pre>
+<p><strong>Header <code>nxt_port_msg_t</code>:</strong></p>
+<pre><code class="language-c">uint32_t    stream;      /* RPC request/response pairing */
+nxt_pid_t   pid;         /* sender pid (unused on Linux — CMSG instead) */
+uint32_t    reply_port;  /* where to reply */
+uint8_t     type;        /* NEW_PORT, MMAP, DATA, READY, ... */
+uint8_t     last, mmap, nf, mf;  /* fragmentation flags */</code></pre>
+<p><strong>Key: fd via SCM_RIGHTS.</strong> A message carries up to 2 descriptors (socket, memfd, queue). Ownership semantics are what PR #208-#212 harden.</p>
+<h3>2. Large data — shared memory (mmap)</h3>
+<p><code>nxt_port_mmap_header_t</code> — large payloads (request bodies, config):</p>
+<pre><code>sender:   ftruncate(memfd, size) → mmap → write → MMAP message
+receiver: gets fd (memfd) → fstat → mmap → read</code></pre>
+<p>Shared segment (<code>nxt_port_memory.c</code>) with chunks — the router↔worker data path.</p>
+<h2>Port lifecycle</h2>
+<h3>1. Creation (NEW_PORT)</h3>
+<pre><code>process A (e.g. prototype) creates socketpair:
+  pair[0] — own end
+  pair[1] — handed over via SCM_RIGHTS in NEW_PORT message
+  + queue_fd (memfd queue)
+
+→ B (router) receives NEW_PORT:
+  nxt_port_new_port_handler():
+    msg-&gt;fd[0] = pair[1]  → port-&gt;pair[1]
+    msg-&gt;fd[1] = queue_fd → mmap&#x27;d as port-&gt;queue</code></pre>
+<h3>2. Send</h3>
+<pre><code>nxt_port_socket_write():
+  if data ≤ max_size   → SOCK_DGRAM sendmsg
+  if data &gt; max_size   → mmap chunk + MMAP message
+  fragmentation: mf/nf bits for large buffers</code></pre>
+<h3>3. Receive</h3>
+<pre><code>nxt_port_read_handler() → nxt_port_read_msg_process():
+  recvmsg() → nxt_port_recv_msg_t
+  cmsg_pid — kernel-validated sender PID (SCM_CREDENTIALS)
+  → dispatch by msg-&gt;port_msg.type → handler</code></pre>
+<h2>Queue (nxt_port_queue_t)</h2>
+<p>Ring queue in shared memory (memfd):</p>
+<pre><code class="language-c">nxt_port_queue_t (655380 bytes):
+  header: producer/consumer indices, magic
+  buffer: ring of messages</code></pre>
+<p>Producer writes, consumer reads — both via mmap on the same memfd. Primary router↔worker path. #211 validates the object size before mapping.</p>
+<h2>RPC layer (nxt_port_rpc.c)</h2>
+<p>Streams pair requests with responses:</p>
+<pre><code>nxt_port_rpc_register_peer() → stream N
+request  with stream=N
+response with stream=N → matches pending callback</code></pre>
+<h2>Security boundary (what #208-#212 fix)</h2>
+<table><thead><tr><th>Vector</th><th>Mechanism</th><th>PR</th></tr></thead><tbody><tr><td>Sender pid</td><td><strong>cmsg_pid</strong> (SCM_CREDENTIALS, kernel-validated)</td><td>—</td></tr><tr><td>Forged WHOAMI</td><td>handler closed 1 of 2 fds</td><td>#208</td></tr><tr><td>Forged PROCESS_READY</td><td>queue remap, state corruption</td><td>#208</td></tr><tr><td>Forged CHANGE_FILE</td><td>NULL deref + OOB read</td><td>#210</td></tr><tr><td>Short memfd</td><td>SIGBUS on access</td><td>#211</td></tr><tr><td>Forged NEW_PORT</td><td>stack-garbage pointer + re-point vuln</td><td>#212</td></tr><tr><td>fd exhaustion</td><td>forged messages leak fds</td><td>#208, #212</td></tr></tbody></table>
+<h3>Trust model</h3>
+<ul><li>Message <strong>type</strong> comes off the wire — any peer can name any type.</li><li>PID is kernel-validated (cmsg), but pid-isolated workers report a</li></ul>
+<p>namespace-local pid — PROCESS_READY lookup stays on self-declared pid (documented limitation in #208).</p>
+<ul><li>Handlers must call <code>nxt_port_recv_msg_close_fds()</code> on reject paths —</li></ul>
+<p>the dispatcher does not reclaim fds after the handler returns.</p>
+<h2>Performance</h2>
+<p>From connection-flow-visualization: IPC router↔worker is <strong>&lt;0.1% of request time</strong> (~20-200µs small, ~20µs response). UDS + shared memory is faster than FastCGI sockets. Main path:</p>
+<pre><code>recv TCP (50µs) → parse (200µs) → route (10µs) → IPC (20-200µs)
+→ PHP handler (45ms!) → IPC back (20µs) → writev (50µs)</code></pre>
+<h2>Known gaps / open items</h2>
+<ul><li>SO_REUSEADDR used for listeners (restart); SO_REUSEPORT not used</li></ul>
+<p>(zero-downtime router restart would need it — separate feature).</p>
+<ul><li>#212 respawn interaction: NEW_PORT for an existing port is now refused;</li></ul>
+<p>respawn flow (kill -9 worker → new prototype sends NEW_PORT while the old port record is still live) needs the owner-state check (STARTING vs active) before refusing.</p>
+<ul><li><code>nxt_app_new_port_handler()</code> closes fds right after the base handler —</li></ul>
+<p>correct for discovery/prototype (they don't map queues), but the respawn path must not lose the queue fd.</p>
+<script src="/freeunit-kb/assets/kb.js"></script>
+</body></html>

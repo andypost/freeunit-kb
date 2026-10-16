@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>engineering/zen-review-pr-291</title>
+<link rel="stylesheet" href="/freeunit-kb/assets/kb.css">
+</head><body>
+<nav class="crumbs"><a href="/freeunit-kb/index.html">index</a> / engineering/zen-review-pr-291</nav>
+
+<h1>engineering/zen-review-pr-291</h1>
+
+<h1>zen-review PR #291 — socket: refuse a port message whose control data was truncated</h1>
+<p>_2026-09-08. Review of freeunitorg/freeunit#291. +1115/−14, 9 files. Fixes #264._ _APPRoved. Cross-language (Linux C + Go binding)._</p>
+<h2>The bug</h2>
+<p><code>recvmsg()</code> under <code>RLIMIT_NOFILE</code> sets <code>MSG_CTRUNC</code>; the <code>SCM_RIGHTS</code> block is cut. What a handler then sees is a well-formed, kernel-authenticated message whose descriptor is <code>-1</code>, so every fd-typed message (NEW_PORT, MMAP, port hand-off) takes its fd-less path — a silent, hard-to-infer corruption (payload and credential intact, only SCM_RIGHTS cut).</p>
+<h2>The fix (correct, cross-language)</h2>
+<ul><li><code>nxt_socket_msg.h</code>: carry <code>oob-&gt;truncated = (msg.msg_flags &amp; MSG_CTRUNC) != 0</code>,</li></ul>
+<p>with <code>nxt_recvmsg</code> clearing <code>msg.msg_flags = 0</code> first so it reads what <code>recvmsg()</code> wrote.</p>
+<ul><li><code>nxt_socket_msg_oob_get_fds</code>: refuse when <code>oob-&gt;size == 0 &amp;&amp; oob-&gt;truncated</code>.</li><li><code>nxt_unit_ctx_port_recv</code> (C) and <code>nxt_unit_ctx_port_recv</code> (Go) drop the message</li></ul>
+<p>with a distinct alert naming type/stream, closing any fd that did arrive (<code>closeUnixRights</code> in Go, <code>done:</code> path in C). Go detects <code>MSG_CTRUNC</code> at the syscall level because <code>ReadMsgUnix</code> consumes it.</p>
+<ul><li><code>nxt_socket_msg_oob_reset</code> / <code>nxt_port_read_handler</code> unwind the counter.</li><li>New C test <code>nxt_port_ctrunc_test.c</code>.</li></ul>
+<h2>Refined verdict on the Codex P1</h2>
+<p>Codex P1: the refusal branch does a single <code>nitems--</code> + <code>return</code>; if a queue-only message was enqueued after the READ_SOCKET marker but before the truncated datagram was processed, its sender saw <code>nitems != 0</code> and wrote no wakeup, so the branch leaves a queued message with <code>nitems &gt; 0</code> and no reader scheduled → port stalls. Mechanism is coherent with the <code>nxt_port_queue_send</code> notify protocol (<code>notify = (i == 0)</code>, pre-increment).</p>
+<p><strong>Assessment (traced the nitems accounting):</strong></p>
+<ul><li>The reader already has the canonical <strong>decrement-and-recheck handoff</strong> that</li></ul>
+<p>Codex asks for at <code>nxt_port_socket.c:959-966</code> (<code>nitems--</code>, re-recv, <code>return</code> if still empty, else <code>nitems++</code>). The truncation branch (<code>:1091</code>) does a <em>plain</em> <code>nitems-- + return</code>, diverging from that established pattern — so the concern is NOT baseless: it's a real divergence from the file's own recheck-handoff.</p>
+<ul><li>Trigger is rare (truncation + a concurrent queue-only enqueue in the same</li></ul>
+<p>window). The pre-fix code was strictly worse (bare <code>return</code> stranded the buffer, the marker and the entry-hold on EVERY truncation).</p>
+<ul><li><strong>Verdict: not a merge blocker; a valid low-probability P1 worth a follow-up.</strong></li></ul>
+<p>Remedy: reuse the <code>959-966</code> recheck-handoff on the truncation path (or keep draining), plus a targeted test forcing truncation + concurrent enqueue. Not lost, documented.</p>
+<h2>Notes</h2>
+<ul><li>Fixes #264. Cross-language (Linux SCM_CREDENTIALS + Go binding). Sibling:</li></ul>
+<p>zen-review-pr-289 (sender auth), pr-280 (start_timeout).</p>
+<script src="/freeunit-kb/assets/kb.js"></script>
+</body></html>

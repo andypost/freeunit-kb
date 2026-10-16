@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>engineering/acme-nuc-requirements</title>
+<link rel="stylesheet" href="/freeunit-kb/assets/kb.css">
+</head><body>
+<nav class="crumbs"><a href="/freeunit-kb/index.html">index</a> / engineering/acme-nuc-requirements</nav>
+
+<h1>engineering/acme-nuc-requirements</h1>
+
+<h1>НУЦ (Russian National CA) ACME requirements + the acme.sh fix</h1>
+<p>Source: <code>acme_client_fix.rar</code> (Александр, 2026-10-14) = an <strong>acme.sh 3.1.2</strong> tree plus <code>acme.sh_changes.docx</code> (НУЦ's change list). НУЦ = ИС НУЦ (<code>nuc.voskhod.ru</code>), an ACME server issuing RSA <strong>DV</strong> certs, valid 90 days, chained to the Russian Trusted Root CA.</p>
+<h2>The seven changes НУЦ requires to acme.sh</h2>
+<ol><li><strong>keyUsage extension</strong> in the CSR: <code>digitalSignature,keyEncipherment</code></li></ol>
+<p>(required) + <code>keyAgreement</code> (optional) — <code>acme.sh:1261</code>.</p>
+<ol><li><strong>Subject <code>C=RU</code></strong> — the CSR subject carries <code>countryName=RU</code> —</li></ol>
+<p><code>acme.sh:1305-1313</code> (<code>openssl req -subj ".../C=RU"</code>).</p>
+<ol><li><strong>Renew period 85 days</strong> — <code>DEFAULT_RENEW=85</code> (<code>acme.sh:70</code>), because НУЦ DV</li></ol>
+<p>certs are valid 90 days.</p>
+<ol><li><strong><code>idn</code> → <code>idn2</code></strong> — IDNA 2008 plus terminal-encoding fixes (<code>_idn()</code>,</li></ol>
+<p><code>acme.sh:1212</code>).</p>
+<ol><li><strong>Hide sensitive log data</strong> — the POST body is hidden by default; <code>secure_debug</code></li></ol>
+<p>(hidden) / <code>insecure_debug</code> (plaintext) / unset (not logged); <code>--output-insecure</code> reveals it. <code>_secure_debug*</code> + <code>HIDDEN_VALUE</code> (<code>acme.sh:118,353,1938-1954</code>).</p>
+<ol><li><strong><code>dns_regru.sh</code> cyrillic-domain fix</strong> — unify full-domain / sub-domain</li></ol>
+<p>formatting.</p>
+<ol><li><strong><code>dns_regru.sh</code> log hiding</strong> — <code>_post</code> hides the DNS API login/password.</li></ol>
+<p>НУЦ's own note: <strong>any</strong> ACME client works, provided its CSR matches НУЦ's field/extension requirements.</p>
+<h2>Assessment</h2>
+<ul><li><strong>All seven changes are CLIENT-side; none touches FreeUnit.</strong> FreeUnit only</li></ul>
+<p>receives the resulting bundle through <code>PUT /certificates/&lt;name&gt;</code>; the deploy hook is unchanged.</p>
+<ul><li><strong>Two items are CSR requirements</strong> (keyUsage, C=RU) and can be met **without</li></ul>
+<p>patching acme.sh**: generate the CSR with <code>openssl req</code> (subject <code>C=RU</code>, a config carrying the <code>keyUsage</code> extension) and pass <code>acme.sh --issue --csr &lt;csr&gt;</code>. This keeps the client upgrade-proof.</p>
+<ul><li><strong>The renew period</strong> is acme.sh configuration (<code>Le_RenewalDays</code>), not a patch.</li><li><strong>idn2 / log-hiding / dns_regru</strong> are genuine acme.sh changes — check whether a</li></ul>
+<p>current upstream acme.sh already carries them before vendoring the fork.</p>
+<ul><li>Recommendation: <strong>(A)</strong> stock acme.sh + a custom CSR + <code>Le_RenewalDays=85</code> + the</li></ul>
+<p>FreeUnit deploy hook (no fork); or <strong>(B)</strong> adopt НУЦ's build as-is. FreeUnit core: <strong>no change</strong>.</p>
+<ul><li>Fits the <code>plugins.freeunit.org</code> catalog as a "НУЦ / acme.sh" entry — a hook +</li></ul>
+<p>a recipe, not core.</p>
+<h2>Prototype</h2>
+<p>The deploy hook + the recipe are in the workbench fork: <strong><code>freeunitorg/freeunit-exp#51</code></strong> — <code>exp/acme-sh-nuc/acme-sh-freeunit-hook.sh</code> (the hook) and <code>exp/acme-sh-nuc/README.md</code> (recipe), with <code>docs/exp/acme-sh-nuc.md</code> (note). Path A: stock acme.sh + <code>--csr</code>. No core change.</p>
+<h2>Related</h2>
+<ul><li><code>engineering/acme-tls-plan.md</code>, <code>engineering/acme-certbot-thin-layer.md</code></li></ul>
+<script src="/freeunit-kb/assets/kb.js"></script>
+</body></html>

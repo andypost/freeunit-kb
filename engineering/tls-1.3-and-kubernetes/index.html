@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>engineering/tls-1.3-and-kubernetes</title>
+<link rel="stylesheet" href="/freeunit-kb/assets/kb.css">
+</head><body>
+<nav class="crumbs"><a href="/freeunit-kb/index.html">index</a> / engineering/tls-1.3-and-kubernetes</nav>
+
+<h1>engineering/tls-1.3-and-kubernetes</h1>
+
+<h1>TLS 1.3 and the cluster case — deep research (2026-10-11)</h1>
+<p>Question: what does TLS work have to deliver for 1.38, given that local networks and Kubernetes need TLS and preferably 1.3? Priority: 1.38.</p>
+<p>Method: read the tree at <code>origin/master</code>, the TLS validation surface, the OpenSSL backend, the published docs, and the upstream issue archive. The stream plan A separate stream document owns the sequencing; this file owns the facts.</p>
+<h2>What already exists (evidence)</h2>
+<table><thead><tr><th>Capability</th><th>State</th><th>Evidence</th></tr></thead><tbody><tr><td>TLS 1.3</td><td><strong>Available today</strong>, but only through <code>conf_commands</code></td><td>docs <code>configuration/index.rst</code> shows <code>"conf_commands": {"ciphersuites": "TLS_AES_128_GCM_SHA256:...", "minprotocol": "TLSv1.3"}</code></td></tr><tr><td>Version pinning as a config member</td><td><strong>Absent</strong></td><td>no <code>set_min_proto_version</code> / <code>set_max_proto_version</code> in the backend; the TLS object has only <code>certificate</code>, <code>conf_commands</code>, <code>session</code></td></tr><tr><td>Cipher control</td><td>Only via <code>conf_commands</code> (OpenSSL 3 conf commands), gated on <code>NXT_HAVE_OPENSSL_CONF_CMD</code></td><td>same member list; the alternative path validates as <code>unsupported</code></td></tr><tr><td>SNI, several certificates</td><td><strong>Works</strong></td><td><code>SSL_CTX_set_tlsext_servername_callback</code> (<code>src/nxt_openssl.c:374</code>), <code>SSL_get_servername</code> (<code>:1083</code>); docs: an array of bundle names, the matching bundle answers a server name</td></tr><tr><td>Session resumption</td><td>Cache by size and timeout, plus tickets with a key</td><td><code>nxt_ssl_session_cache</code> (<code>:828</code>), <code>session { cache_size, timeout, tickets }</code>; <code>SSL_OP_NO_TICKET</code> when no key is given</td></tr><tr><td>Client certificates (mTLS)</td><td><strong>Code path exists, surface does not</strong></td><td><code>if (conf-&gt;ca_certificate != NULL)</code> → <code>SSL_CTX_set_verify(SSL_VERIFY_PEER)</code> + <code>SSL_CTX_load_verify_locations</code> + client CA list (<code>:335-367</code>); both <code>/<em> TODO: verify callback </em>/</code> and <code>/<em> TODO: verify depth </em>/</code> (depth pinned to 1)</td></tr><tr><td>Certificate rotation</td><td>Replaces a bundle in place</td><td><code>PUT /certificates/&lt;name&gt;</code> replacement (1.37.0 CHANGES); bundle choice happens per handshake through SNI</td></tr><tr><td>OCSP stapling</td><td>Absent</td><td>only error-code handling around OCSP callbacks (<code>:1815</code>, <code>:2013</code>)</td></tr><tr><td>0-RTT / early data</td><td>Absent</td><td>no <code>early_data</code> handling anywhere in <code>src/</code></td></tr><tr><td>SNI-based per-name TLS policy</td><td>Absent</td><td>the servername callback picks a bundle, not a protocol set or cipher set</td></tr></tbody></table>
+<h2>What the cluster and the local network actually need</h2>
+<p>At the edge, a proxy or ingress terminates TLS and the core needs nothing. Inside a cluster, pods talk to pods: the request arrives at the application server with TLS already on it because there is no proxy in the path (sidecars and service meshes are an option, not a given). That yields four requirements, in order of how often they decide an adoption:</p>
+<ol><li><strong>An explicit protocol policy.</strong> Cluster policy scanners and security baselines</li></ol>
+<p>want a field that says "TLS 1.2 minimum" or "TLS 1.3 only" and that fails at configuration time, not at the first handshake. <code>conf_commands</code> is a general escape hatch: keys are free-form, a typo is a runtime failure, and the field is not in the schema a scanner reads.</p>
+<ol><li><strong>Client certificates for service-to-service auth.</strong> Short-lived certificates from</li></ol>
+<p>a cluster CA (SPIFFE identifiers, step-ca, cert-manager) are the mesh-less way to authenticate a caller. The backend can verify them; nothing in the configuration surface asks for it, and the verify depth is pinned to 1 with a TODO.</p>
+<ol><li><strong>Rotation without a restart.</strong> cert-manager rewrites a mounted secret. What the</li></ol>
+<p>operator needs is a documented, atomic replacement path, and a clear statement of who triggers it (a control API call, not a file watcher).</p>
+<ol><li><strong>TLS 1.3 semantics that hold.</strong> 1.3 removed renegotiation and the session cache</li></ol>
+<p>works differently; tickets carry the resumption. Whatever the configuration says must hold on 1.3 too, and 0-RTT must be refused on purpose rather than inherited from a library default.</p>
+<p>Small image, read-only rootfs and health probes are already satisfied or covered by other work, and are not part of this list.</p>
+<h2>Recommended 1.38 scope</h2>
+<p><strong>P0 — a TLS object that says what it means.</strong> Add first-class members beside <code>certificate</code>: a minimum and maximum protocol version, a TLS 1.3 cipher suite list, and the pre-1.3 cipher list. Keep <code>conf_commands</code> for everything else. Rationale: this is what a cluster manifest and a policy scanner consume; it is also the smallest change that closes the "preferably 1.3" ask in a reviewable way.</p>
+<p><strong>P0 — the client CA member, wired to the existing path.</strong> Expose the CA certificate and the verification policy (off / request / require) plus a configurable depth, and give the two TODOs a real callback. Rationale: mTLS is the mesh-less answer, and the backend already does the hard part.</p>
+<p><strong>P1 — the TLS module carries 1.3 and the <code>h3</code> ALPN token.</strong> The module interface (W1, pull request 23) must treat 1.3 as a first-class version and <code>h3</code> as a first-class protocol value. Rationale: QUIC requires 1.3, so the HTTP/3 track cannot start without it. This is the only hard coupling between the two tracks.</p>
+<p><strong>P1 — rotation, documented end to end.</strong> State the contract: which control API call replaces a bundle, what happens to connections in flight, and how a mounted secret becomes a new bundle. Add a test that replaces a bundle while requests are running.</p>
+<p><strong>P2 — refuse 0-RTT explicitly.</strong> When 1.3 is on, early data must be off by default with a documented reason (replay), rather than depending on the library default.</p>
+<p><strong>Deferred, with the reason on record:</strong> OCSP stapling (operators terminate at a proxy that staples), ECH, post-quantum groups, per-SNI protocol policy. Each has a dependency or a cost that does not fit the 1.38 window.</p>
+<h2>What must be verified before any claim</h2>
+<ul><li>Whether a client CA is reachable today through a documented surface (<code>certificate</code></li></ul>
+<p>as an array is documented for SNI bundles; the client-CA path needs a check of its own before anyone writes "mTLS is supported").</p>
+<ul><li>The lowest OpenSSL the build accepts, because <code>conf_commands</code> and therefore the</li></ul>
+<p>only current route to 1.3-only depends on OpenSSL 3 conf command support, and the validator marks the member <code>unsupported</code> when the library lacks it.</p>
+<ul><li>That the rotating-bundle path is atomic under load, not only that the API returns</li></ul>
+<p>success.</p>
+<h2>Do not claim</h2>
+<ul><li>Do not present <code>conf_commands</code> as a supported TLS 1.3 configuration. It is a route</li></ul>
+<p>that works; it is not a feature.</p>
+<ul><li>Do not claim mTLS, OCSP stapling, 0-RTT or per-SNI policy support.</li><li>Do not put a version number or a date on any of the P0 to P2 items in public text</li></ul>
+<p>before the code lands.</p>
+<h2>Prior art</h2>
+<p>The upstream issue archive carries no demand thread for TLS 1.3 and no SNI request — the mentions of Kubernetes are incidental, inside unrelated reports. The consequence is worth stating plainly: the cluster case is not an upstream backlog item that can be inherited; if it is wanted, it is written here.</p>
+<h2>Related</h2>
+<ul><li><code>engineering/tls-module-prototype.md</code> — W1 prototype, the module interface, ALPN trap</li><li><code>engineering/h3-research.md</code> — W3 research, the 1.3 coupling from the QUIC side</li><li><code>engineering/release-1.37.1-forecast.md</code> — 1.38 staging, to place this work</li></ul>
+<script src="/freeunit-kb/assets/kb.js"></script>
+</body></html>

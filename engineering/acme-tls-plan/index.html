@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>engineering/acme-tls-plan</title>
+<link rel="stylesheet" href="/freeunit-kb/assets/kb.css">
+</head><body>
+<nav class="crumbs"><a href="/freeunit-kb/index.html">index</a> / engineering/acme-tls-plan</nav>
+<p class="banner warn">PLAN — not started</p>
+<h1>engineering/acme-tls-plan</h1>
+<table class="meta"><tr><th>created</th><td>2026-08-22</td></tr><tr><th>goal</th><td>Native ACME/Let's Encrypt support for FreeUnit</td></tr><tr><th>source</th><td>comparison of nginx-acme 0.4.1, Unit's existing cert handling,</td></tr></table>
+<h1>FreeUnit ACME/TLS — Plan (nginx-acme comparison)</h1>
+<p><strong>Created:</strong> 2026-08-22 <strong>Status:</strong> PLAN — not started <strong>Goal:</strong> Native ACME/Let's Encrypt support for FreeUnit <strong>Source:</strong> comparison of nginx-acme 0.4.1, Unit's existing cert handling, lego DNS provider landscape</p>
+<hr>
+<h2>Why not copy nginx-acme</h2>
+<p>Adopting nginx's approach is possible <strong>in shape</strong> but buys nothing on wildcards. nginx-acme 0.4.1 (May 2026) still has <strong>no dns-01 and no wildcards</strong> — open issue #11.</p>
+<p>Three of the four mechanisms nginx-acme needs, Unit/FreeUnit <strong>doesn't</strong>:</p>
+<table><thead><tr><th>nginx-acme mechanism</th><th>FreeUnit equivalent</th></tr></thead><tbody><tr><td>worker-0 election</td><td>❌ unnecessary — controller is already a singleton</td></tr><tr><td>shared memory zone</td><td>❌ unnecessary — same reason</td></tr><tr><td>variable-cert trick</td><td>❌ unnecessary — Unit already rotates certs connection-gracefully via config re-apply</td></tr></tbody></table>
+<p>The "we have most of the pieces" read was ~70% right. <strong>The missing 30% is one coherent thing:</strong> resolver + TLS-client transport + a minimal HTTP client. nginx-acme got the first two free from nginx and wrote the third itself (~10KB).</p>
+<h2>The DNS provider problem — decisive</h2>
+<p>Numeric reality:</p>
+<ul><li><strong>lego has 220 providers ≈ 85k Go LOC</strong> — 77% of the entire project.</li><li>Nobody reimplements that in C:</li><li>Caddy keeps zero in core</li><li>Traefik embeds lego</li><li>certbot bundles 13</li><li><strong>Propagation checking is a whole second subsystem</strong> — lego polls every</li></ul>
+<p>authoritative NS every 2s and follows CNAMEs.</p>
+<h3>The one exception: acme-dns</h3>
+<ul><li>One-time CNAME collapses all providers to a <strong>3-endpoint REST API</strong></li><li>~238 LOC</li><li>Keeps exactly 2 rolling TXT records — specifically for **wildcard+apex</li></ul>
+<p>orders**</p>
+<h2>Recommendation ladder</h2>
+<h3>Days — PUT-overwrite of an in-use cert + auto re-apply</h3>
+<ul><li>Kills the rename/repoint/delete dance</li><li>Makes every external client a one-liner</li><li>Fixes upstream #195</li><li><strong>Prerequisite for everything else — ships value alone</strong></li></ul>
+<h3>Weeks — unit-acme sidecar embedding lego</h3>
+<ul><li>Inherits 220 providers and <strong>ARI</strong> for free</li><li>Keeps DNS API credentials out of the daemon</li><li>Leapfrogs nginx: nginx has neither dns-01 nor wildcards</li></ul>
+<h3>Later — in-daemon Rust shim (zero-config TLS story)</h3>
+<ul><li>http-01 first</li><li>dns-01 only ever as an <strong>acme-dns client</strong></li></ul>
+<blockquote><p>Language check (2026-09-25): keep the in-daemon shim in <strong>Rust/C</strong> — http-01 and tls-alpn-01 need no DNS providers, so Go/lego's 200-provider breadth is irrelevant here. Wildcards (dns-01) are a <strong>Go/lego sidecar</strong>, not in the daemon. See <code>engineering/acme-step3-indame-language.md</code>.</p></blockquote>
+<hr>
+<h2>Key facts to remember</h2>
+<ul><li>nginx-acme 0.4.1 (May 2026): no dns-01, no wildcards (issue #11)</li><li>lego = 220 providers, ~85k Go LOC, 77% of project</li><li>Caddy: zero DNS providers in core; Traefik: embeds lego; certbot: 13</li><li>acme-dns: 3-endpoint REST API, ~238 LOC, 2 rolling TXT records</li><li>Unit already rotates certs gracefully via config re-apply (no restart)</li><li>FreeUnit missing: resolver + TLS-client transport + minimal HTTP client</li><li>Upstream #195: cert rename/repoint/delete dance</li></ul>
+<h2>Upstream precedent — full issue survey (via <code>gh_archive</code>, 2026-09-10)</h2>
+<p>Searched the <strong>complete</strong> nginx/unit archive (1087 issues + 467 PRs, 2017→2025, repo archived) offline for ACME/cron/cert. Findings that bear on X9/X10:</p>
+<table><thead><tr><th>Issue</th><th>State</th><th>Bearing</th></tr></thead><tbody><tr><td><strong>#424</strong> «Integrated certbot in unit»</td><td>OPEN 2020-2026</td><td>The direct X9 request. smtalk: <em>«certbot supports post-hooks, it could simply load the cert to the unit store»</em>. Users left for <strong>Caddy</strong> (connebs 2023: <em>«because of the built-in support for LetsEncrypt»</em>; raix 2025: <em>«cert management / TLS-ALPN-01 baked into Unit — one of the biggest drawbacks vs Caddy»</em>)</td></tr><tr><td><strong>#195</strong> «Need a better way to update certificate»</td><td>OPEN 2018-2025</td><td>= our <strong>X9 Step 1</strong>. lcrilly confirms the 3-step rotate; MagnusOxlund (2025): <em>«is the plan for Unit to perform the steps internally, so a single PUT can rotate?»</em>; <code>PUT</code> on an existing bundle → <code>{"error": "Certificate already exists."}</code></td></tr><tr><td><strong>#547</strong> «Best practice about certificate rotation»</td><td>CLOSED 2021</td><td>mTLS + rotation + <strong>cron</strong> in one thread. sycured: <em>«1 process: unit; 1 daemon/cron: pulling the new certificate»</em>. <strong>VBart: «Do you plan to support Mutual TLS? — Yes… like <code>ssl_verify_client</code>/<code>ssl_client_certificate</code>… likely this year» (2021 → still not shipped)</strong></td></tr><tr><td><strong>#406</strong> «Ability to load multiple certificates»</td><td>CLOSED (SNI, 1.23.0)</td><td>solved</td></tr><tr><td><strong>#1528</strong> «How to run commands alongside applications?»</td><td>CLOSED 2025</td><td><strong>DECISIVE for X10</strong>: user wanted Laravel queue/<code>schedule</code> alongside apps; <strong>ac000 (maintainer): «I think this is really outside the scope of Unit»</strong></td></tr><tr><td><strong>#1015</strong> «concurrent jobs in multi-instance Express app»</td><td>OPEN</td><td>about the <em>app</em>, not a Unit scheduler</td></tr></tbody></table>
+<p>→ <strong>Full six-theme survey</strong> (ACME, cert lifecycle, certs API, mTLS, scheduler, TLS-module) in <code>engineering/unit-archive-acme-cron-survey.md</code> — incl. <strong>#307</strong> (peer-cred ancestor), #358 (ECDSA, open), #659 (prototype lifecycle).</p>
+<p><strong>Reading for the roadmap:</strong></p>
+<ul><li><strong>X9 (ACME) + Step-1 (PUT-overwrite) address LIVE upstream demand</strong> (#424, #195,</li></ul>
+<p>#547) with documented user churn to Caddy → strong PR/story value.</p>
+<ul><li><strong>mTLS is an old unfulfilled upstream promise</strong> (VBart 2021 on #547, same as #225) →</li></ul>
+<p>our D7/X11 mTLS work closes a 4-year TODO.</p>
+<ul><li>**X10 (daemon-internal scheduler) was NOT requested upstream — and was actively</li></ul>
+<p>declined<strong> (#1528: maintainers say running commands/scheduling is out of scope). So X10 is </strong>our own differentiator**, not upstream-alignment. Keep it an IDEA, framed as "TLS/ACME self-management", not "a general cron".</p>
+<ul><li><strong>"cron" is absent from Unit history</strong> as a feature request; the ecosystem answer</li></ul>
+<p>is always "external cron/certbot/systemd" (#547 tippexs: <em>«add a crontab to your container image»</em>).</p>
+<p><strong>Method:</strong> <code>python3 tools/gh_archive.py search --repo nginx/unit "&lt;term&gt;"</code> (zero API calls — see <code>gh-archive-tool.md</code>).</p>
+<h2>Status &amp; priority (updated 2026-09-06)</h2>
+<p><strong>Priority vs Control API auth:</strong> ACME/auto-TLS is the <strong>visible external differentiator</strong> (what DrupalCon/users see — auto certs, wildcards nginx lacks). Control API auth is internal hardening (still zero artifacts). For release readiness, <strong>ACME ladder wins the priority</strong> — but the order is: Step 1 small (PUT-overwrite) is the prerequisite and ships value alone; Step 2 (sidecar) is the flagship. Do NOT gate ACME behind Control API auth.</p>
+<table><thead><tr><th>Step</th><th>Effort</th><th>Status</th></tr></thead><tbody><tr><td>PUT-overwrite + auto re-apply</td><td>days</td><td>NOT STARTED</td></tr><tr><td>unit-acme sidecar (lego)</td><td>weeks</td><td>NOT STARTED</td></tr><tr><td>in-daemon Rust shim</td><td>later</td><td>NOT STARTED</td></tr></tbody></table>
+<h2>Step 1 technical plan (PUT-overwrite in-use cert + auto re-apply)</h2>
+<p><strong>Goal:</strong> make replacing an in-use certificate a one-liner PUT (no rename/repoint/delete dance, upstream #195).</p>
+<p><strong>I find in the code (verified 2026-09-06):</strong></p>
+<ul><li><code>nxt_cert_info_save()</code> (<code>src/nxt_cert.c:428-461</code>) <strong>does</strong> <code>lhq.replace = 1</code> —</li></ul>
+<p>low-level info-store PUT-overwrite by name is present.</p>
+<ul><li><strong>The store is a DIRECTORY, not an apply-layer pointer.</strong> <code>nxt_cert_store_load()</code></li></ul>
+<p>(<code>src/nxt_cert.c:922</code>) does <code>opendir(rt-&gt;certs.start)</code> + <code>readdir</code> — it RE-READS the cert files by name on every apply. So replacing a cert at the store level is a PUT of the same-named file, which already works.</p>
+<ul><li><strong>The actual "dance" is the config-upload/apply path</strong>: PUT of a <code>certificate</code></li></ul>
+<p>upload goes through <code>nxt_controller.c</code> handlers <code>nxt_cert_store_get</code> (1897) / <code>nxt_cert_store_delete</code> (1912); the LISTENER binding is resolved at re-apply via <code>nxt_conf_get_path(listener, "/tls/certificate")</code> (<code>src/nxt_router.c:2249</code>). <strong>The fix is NOT "make store replace" (it already does) but make the listener re-apply path swap the served cert on a same-name replacement</strong> — i.e. ensure the apply pass re-reads by name (it does load), and that a replacement triggers the TLS-listener cert re-config without a manual restart.</p>
+<p><strong>Steps (what to change) — VERIFIED 2026-09-06:</strong></p>
+<ul><li><code>nxt_router_conf_tls_insert()</code> (<code>nxt_router.c:2429</code>) only stores the cert</li></ul>
+<p><strong>NAME</strong> (<code>nxt_conf_get_string(value, &amp;tls-&gt;name)</code>) — it does NOT resolve a <code>nxt_cert_t</code>.</p>
+<ul><li>The resolve is <strong>a single async point</strong>: <code>nxt_router.c:1267</code> —</li></ul>
+<p><code>nxt_cert_store_get(task, &amp;tls-&gt;name, ..., nxt_router_tls_rpc_handler, tls)</code>. When the store returns, <code>nxt_router_tls_rpc_handler</code> gets the cert. So a cert is resolved ONCE (async) at apply; a same-name PUT does not re-run this.</p>
+<ul><li><strong>The real fix:</strong> make a same-name cert PUT re-run the listener's</li></ul>
+<p><code>tls-&gt;name → nxt_cert_store_get</code> path (re-apply of the TLS listener), so <code>nxt_router_tls_rpc_handler</code> receives the NEW cert instead of holding the cached old <code>nxt_cert_t</code>. Store already <code>lhq.replace=1</code> + <code>readdir</code> by name; the missing link is re-resolving by name on listener re-apply after the PUT.</p>
+<ol><li><strong>Wire same-name cert PUT to re-apply the affected TLS listener</strong> (re-run</li></ol>
+<p><code>nxt_router_conf_tls_insert</code> + <code>nxt_cert_store_get</code>) — single point that decides old-vs-new cert.</p>
+<ol><li><strong>PUT-same-name = upsert</strong>, and re-resolve by name so the new cert serves on</li></ol>
+<p>the next handshake.</p>
+<ol><li><strong>Auto re-apply</strong> — after cert PUT bound to an active listener, trigger the</li></ol>
+<p>re-resolve (Unit already rotates certs gracefully via config re-apply).</p>
+<ol><li><strong>Tests:</strong> PUT new cert → 200; PUT same-name replacement → new cert served on</li></ol>
+<p>next handshake (no rename/delete-first); name-collision policy = replace.</p>
+<p><strong>Effort estimate:</strong> days (single coherent slice, not the full ACME client).</p>
+<h2>Current status (2026-09-06 refresh)</h2>
+<ul><li><strong>Step 1 verified against code</strong> — the real blocker is the listener cert-swap</li></ul>
+<p>re-apply path (<code>nxt_router.c:2249</code>), NOT the store (store is an <code>opendir</code>/<code>readdir</code> dir that already re-reads by name; <code>nxt_cert_info_save</code> already <code>lhq.replace=1</code>). The two quorum models (ling, nemotron-3.5-lightning) both flagged the unverified-code SPOT; the verification closes it.</p>
+<ul><li><strong>Roadmap rows added:</strong> <code>v1/roadmap.md</code> now has X9 (ACME/auto-TLS) and X10</li></ul>
+<p>(daemon-internal scheduler) — ACME is no longer off-roadmap.</p>
+<ul><li><strong>Priority:</strong> ACME/auto-TLS ranks above Control-API auth for release readiness</li></ul>
+<p>(visible external differentiator vs internal hardening). Do NOT gate ACME behind Control-API auth.</p>
+<ul><li><strong>No open ACME PR/issue yet</strong> — this is a plan, not a task. The first</li></ul>
+<p>concrete deliverable would be a PR for Step 1 (PUT-overwrite + listener cert-swap re-apply).</p>
+<h2>2026-09-25 update — Step 1 is now in PRs</h2>
+<p>Step 1 (PUT-overwrite / in-place replace, upstream #195) is implemented as two PRs in the #438–#469 wave, both by @andypost, labelled "automatic certificates (ACME, phase 1)":</p>
+<ul><li><strong>#456</strong> <code>feat(cert): check the key at upload and reserve dot names</code> — small,</li></ul>
+<p>no protocol change: <code>PUT /certificates/&lt;name&gt;</code> now verifies the private key matches the certificate (<code>X509_check_private_key()</code>); a wrong-key bundle is rejected. Predecessor of #457.</p>
+<ul><li><strong>#457</strong> <code>feat(cert): replace a certificate in place through the control API</code></li></ul>
+<p>(based on #456) — an external ACME client (certbot, lego) can renew with one <code>PUT</code>, no downtime, no rename/repoint/delete dance. This is the Step-1 fix the plan described (<code>nxt_router.c</code> listener cert-swap re-apply path).</p>
+<p>Still not started: <strong>Step 2</strong> (unit-acme sidecar embedding lego — 220 providers + ARI) and <strong>Step 3</strong> (in-daemon Rust shim). Both remain NOT STARTED.</p>
+<p>The live-validated thin layer (<code>acme-certbot-thin-layer.md</code>) works on top of Step 1's <code>PUT</code>-replace: certbot <code>--webroot</code> + <code>--deploy-hook</code> → <code>PUT</code> the bundle.</p>
+<h2>Open questions before Step 1 code</h2>
+<ul><li>Does the re-apply path (<code>nxt_router.c:2249</code>) cache the <code>nxt_cert_t</code> or</li></ul>
+<p>re-resolve by name? If it caches, a same-name PUT won't be picked up until restart — that is the "dance" (#195). Verify before writing the fix.</p>
+<ul><li>Is there a test that PUTing the same cert name already returns 200? If the</li></ul>
+<p>control-API upload rejects duplicates, that reject is where the fix lands.</p>
+<script src="/freeunit-kb/assets/kb.js"></script>
+</body></html>

@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>nginx vs freenginx vs Angie — measured code divergence</title>
+<link rel="stylesheet" href="/freeunit-kb/assets/kb.css">
+</head><body>
+<nav class="crumbs"><a href="/freeunit-kb/index.html">index</a> / engineering/nginx-freenginx-angie-code-comparison</nav>
+<p class="banner warn">analysis</p>
+<h1>nginx vs freenginx vs Angie — measured code divergence</h1>
+<table class="meta"><tr><th>description</th><td>File-level comparison of the three nginx (web-server) forks — fork points, current divergence from upstream, and what each fork added or dropped. Measured against the GitHub mirrors.</td></tr><tr><th>tags</th><td>nginx, freenginx, angie, forks, comparison, code, upstream</td></tr><tr><th>updated</th><td>2026-10-13</td></tr><tr><th>resources</th><td>https://github.com/nginx/nginx, https://github.com/freenginx/nginx, https://github.com/webserver-llc/angie</td></tr><tr><th>created</th><td>2026-10-13 by SOUL. Measured against the GitHub mirrors with a</td></tr></table>
+<h1>nginx vs freenginx vs Angie — how far the code has diverged</h1>
+<p><strong>Created:</strong> 2026-10-13 by SOUL. Measured against the GitHub mirrors with a partial (<code>--filter=blob:none</code>) clone, so <strong>file-level</strong> counts are real; line counts were not captured (the promisor blob fetch failed). Facts are measured unless marked <em>(reported)</em>.</p>
+<blockquote><p>These are forks of <strong>nginx</strong> (the web server) — a different project from nginx/unit, FreeUnit's upstream. Kept as a fork-divergence / governance reference.</p></blockquote>
+<h2>Lineage</h2>
+<table><thead><tr><th></th><th>base</th><th>fork date</th><th>latest (measured)</th></tr></thead><tbody><tr><td><strong>nginx</strong></td><td>— (upstream, F5)</td><td>—</td><td><code>release-1.31.6</code></td></tr><tr><td><strong>freenginx</strong></td><td>nginx <strong>1.25.3</strong></td><td>2024-02-14</td><td><code>release-1.31.4</code></td></tr><tr><td><strong>Angie</strong></td><td>nginx <strong>1.23.2</strong></td><td>2022-10-26</td><td><code>Angie-1.12.2</code> (17 Sep 2026)</td></tr></tbody></table>
+<ul><li><strong>freenginx</strong> shares nginx's git history (nginx 1.25.3 SHA <code>b8fb83b8</code> is</li></ul>
+<p>present in the freenginx mirror) → merge-base works. Maxim Dounin's fork after a governance/CVE-policy dispute with F5. Keeps the codebase, changes branding.</p>
+<ul><li><strong>Angie</strong> has <strong>no shared git ancestry</strong> with the nginx mirror (separate</li></ul>
+<p>import), so merge-base is impossible — compare by tree. Ex-nginx-team fork (Web Server LLC / wbsrv.ru); "drop-in replacement". <em>(reported)</em> tracks nginx releases: README says "on top of nginx 1.31.2", CHANGES carry 23 "ported from nginx" entries.</p>
+<h2>Governance &amp; people (why they differ)</h2>
+<ul><li><strong>nginx</strong> — owned by <strong>F5</strong> (commercial). Open-source core vs commercial</li></ul>
+<p><strong>NGINX Plus</strong>; some capabilities land Plus-first / Plus-only. <strong>Fact:</strong> the community <strong>ingress-nginx</strong> controller — the de-facto Kubernetes ingress — was <strong>retired</strong>: announced late 2025, maintenance ceased <strong>March 2026</strong> (kubernetes.io statement 2026-01-29; ~60% of clusters still used it at end-2025). The Ingress <em>API</em> stays; the NGINX <em>controller</em> is what retired — nginx itself is not retired. <em>Opinion</em> (maintainer): "features only for paid subscribers", regarded by the team as the weakest of the three.</p>
+<ul><li><strong>freenginx</strong> — <strong>bus factor one</strong>: Maxim Dounin's solo fork (a governance</li></ul>
+<p>protest against F5's / CVE policy). No company, no team.</p>
+<ul><li><strong>Angie</strong> — company <strong>"Web Server" (Web Server LLC, wbsrv.ru)</strong>, founded by</li></ul>
+<p><strong>ex-NGINX engineers</strong> (~10 people, led by Valentin Bartenev; they maintained and developed nginx for ~10 years — nginx has belonged to F5 since 2019). They position Angie as "what nginx should have become" and also ship a commercial <strong>Angie PRO</strong>. <em>(reported)</em> the same Moscow team worked on nginx Unit.</p>
+<h2>Measured divergence</h2>
+<p><strong>freenginx vs nginx</strong> (<code>release-1.31.4</code> vs <code>release-1.31.6</code>):</p>
+<ul><li>src files: nginx <strong>426</strong>, freenginx <strong>406</strong>.</li><li>paths differing: <strong>~312</strong> — 4 added / 44 deleted / 264 modified.</li><li>since the fork (2024-02-14): freenginx <strong>354</strong> own commits vs nginx <strong>513</strong>.</li><li>The 44 "nginx-only" paths are mostly repo meta (<code>.github/</code>, <code>LICENSE</code>,</li></ul>
+<p><code>README.md</code>, <code>CONTRIBUTING.md</code>…) — freenginx is hg-based (has <code>.hgtags</code>). Code files nginx has that freenginx lacks (~13): <code>ngx_data.<em></code>, <code>ngx_json</em></code>, <code>ngx_siphash.<em></code>, <code>ngx_event_openssl_cache.c</code>, <code>ngx_http_json_module.c</code>, <code>ngx_http_proxy_v2_module.c</code>, <code>ngx_http_tunnel_module.c</code>, <code>ngx_http_upstream_least_time_module.c</code>, <code>ngx_http_upstream_sticky_module.c</code>, <code>ngx_control.</em></code>, <code>ngx_stream_pass_module.c</code>, <code>ngx_stream_upstream_least_time_module.c</code>.</p>
+<ul><li>freenginx-only files: 4 — <code>.hgtags</code>, <code>docs/text/LICENSE</code>, <code>docs/text/README</code>,</li></ul>
+<p><code>src/mail/ngx_mail_limit_conn_module.c</code>.</p>
+<p>→ <strong>near-identical continuation:</strong> same architecture, module system and config; divergence = nginx's newer commits freenginx hasn't merged + branding.</p>
+<p><strong>Angie vs nginx</strong> (<code>Angie-1.12.2</code> vs <code>release-1.31.6</code>):</p>
+<ul><li>src files: nginx <strong>426</strong>, angie <strong>446</strong>.</li><li>paths differing: <strong>~982</strong> — <strong>705 added</strong> / 38 deleted / 239 modified.</li></ul>
+<p>→ <strong>superset:</strong> Angie keeps nginx and adds a large feature layer.</p>
+<p>Angie-only source (new modules / core, measured):</p>
+<ul><li>core: <code>ngx_acme.<em></code>, <code>ngx_api.</em></code>, <code>ngx_build.c</code>, <code>ngx_docker.<em></code>, <code>ngx_dtoa.</em></code>,</li></ul>
+<p><code>ngx_fiber.h</code>, <code>ngx_sticky.*</code></p>
+<ul><li>http: <code>ngx_http_acme_module.c</code>, <code>ngx_http_api_module.c</code>,</li></ul>
+<p><code>ngx_http_client_module.c</code>, <code>ngx_http_docker_module.c</code>, <code>ngx_http_doh_module.c</code>, <code>ngx_http_metric_module.c</code>, <code>ngx_http_prometheus_module.c</code></p>
+<ul><li>stream: <code>ngx_stream_acme_module.c</code>, <code>ngx_stream_metric_module.c</code>,</li></ul>
+<p><code>ngx_stream_mqtt_preread_module.c</code>, <code>ngx_stream_rdp_preread_module.c</code>, <code>ngx_stream_upstream_sticky_module.c</code></p>
+<p><em>(reported)</em> Angie extras beyond nginx: RESTful JSON API + Prometheus/metric zones, ACME, response-time-aware balancer, stream <code>slow_start</code>, NTLS via Tongsuo, client-side HTTP/3, DoH.</p>
+<h2>One-line answer</h2>
+<ul><li><strong>freenginx ≈ nginx</strong> — same codebase, different governance; ~354 commits of</li></ul>
+<p>independent drift, ~312 paths differ, structure identical.</p>
+<ul><li><strong>Angie = nginx + a large feature layer</strong> — ~982 paths differ, ~20 new src</li></ul>
+<p>files, a whole new module set; tracks nginx as upstream.</p>
+<ul><li><strong>nginx</strong> is upstream and evolves on its own.</li></ul>
+<h2>Method / caveats</h2>
+<ul><li>Partial clones (<code>git clone --filter=blob:none --no-checkout</code>) of</li></ul>
+<p><code>nginx/nginx</code>, <code>freenginx/nginx</code>, <code>webserver-llc/angie</code>; file-level metrics via <code>git diff --name-status --no-renames</code> and <code>git ls-tree</code>.</p>
+<ul><li><strong>Line counts not measured</strong> — lazy blob fetch failed on the partial clone.</li><li>Angie: <strong>no shared git ancestry</strong> with nginx → "since fork" commit counts are</li></ul>
+<p>not derivable; use tree diffs.</p>
+<ul><li>"files differing" between two live tips counts BOTH sides' evolution since the</li></ul>
+<p>shared point, so it over-states a single fork's own changes.</p>
+<ul><li>Versions move — re-measure the tags before quoting.</li></ul>
+<script src="/freeunit-kb/assets/kb.js"></script>
+</body></html>

@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>engineering/operating-principles</title>
+<link rel="stylesheet" href="/freeunit-kb/assets/kb.css">
+</head><body>
+<nav class="crumbs"><a href="/freeunit-kb/index.html">index</a> / engineering/operating-principles</nav>
+
+<h1>engineering/operating-principles</h1>
+<table class="meta"><tr><th>author</th><td>Andrey (andypost)</td></tr><tr><th>rule</th><td>Memory is NOT a mini-KB. Two stores, two purposes.</td></tr><tr><th>purpose</th><td>Tiny long-lived facts only — preferences, ports, keys, IDs, environment config.</td></tr></table>
+<h1>Operating Principles: Memory vs Knowledge Base Separation</h1>
+<p><strong>Author:</strong> Andrey (andypost) <strong>Rule:</strong> Memory is NOT a mini-KB. Two stores, two purposes.</p>
+<hr>
+<h2>MEMORY.md (~2200 char limit)</h2>
+<p><strong>Purpose:</strong> Tiny long-lived facts only — preferences, ports, keys, IDs, environment config.</p>
+<p><strong>Allowed:</strong></p>
+<ul><li>User preferences (verbosity, language, style)</li><li>Tool quirks and workarounds</li><li>Port numbers, hostnames, SSH keys, API tokens</li><li>Repo clone paths, worktree locations</li><li>Telegram group config (require_mention, chat IDs)</li><li>Infrastructure config (Hetzner, Scaleway, OpenRouter)</li></ul>
+<p><strong>NOT allowed:</strong></p>
+<ul><li>Project architecture summaries (→ KB engineering/)</li><li>Codebase stats, benchmark numbers (→ KB engineering/)</li><li>Release notes, changelogs (→ KB releases/)</li><li>Roadmap items, KPIs (→ KB v1/ or v2/)</li></ul>
+<p><strong>Rule of thumb:</strong> If it helps the agent <em>find the right KB file</em>, it belongs in memory. If it IS the content that the agent should read, it belongs in KB.</p>
+<hr>
+<h2>OKF KB (Knowledge Base — no char limit)</h2>
+<p><strong>Purpose:</strong> Everything substantive — architecture, statuses, dumps, summaries, comparisons, research.</p>
+<p><strong>Subdirectories:</strong></p>
+<ul><li><code>engineering/</code> — Architecture deep-dives, benchmarks, security, protocols</li><li><code>v1/</code> — FreeUnit v1 (C-core) overview, architecture, roadmap, releases</li><li><code>v2/</code> — FreeUnit v2 (Rust PoC) overview, architecture, liveness, KPIs</li><li><code>releases/</code> — Release announcements (fact-checked)</li><li><code>repos.md</code> — Repository layout and access</li><li><code>history.md</code> — Project timeline</li><li><code>index.md</code> — Master index</li></ul>
+<hr>
+<h2>The Pointer Rule</h2>
+<p>Memory contains <strong>exactly one line</strong> per KB topic — a pointer, not a summary:</p>
+<pre><code>KB: v1/architecture — C-core stats (141k LOC, ~13k RPS)
+KB: repos.md — repository layout and access</code></pre>
+<p>This tells the agent <em>where to look</em> without duplicating content. If the KB file is missing or outdated, create/update the KB file — don't expand the memory entry.</p>
+<hr>
+<h2>Enforcement</h2>
+<ul><li>Cron jobs and skills that load KB content must reference files by path, not by memory content.</li><li>If a fact changes (e.g. new LOC count), update the KB file. The memory pointer stays the same.</li><li>If memory runs out of space, prune stale env config before trimming KB pointers — KB pointers are the most valuable content in memory.</li></ul>
+<script src="/freeunit-kb/assets/kb.js"></script>
+</body></html>

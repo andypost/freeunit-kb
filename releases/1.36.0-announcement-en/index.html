@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>releases/1.36.0-announcement-en</title>
+<link rel="stylesheet" href="/freeunit-kb/assets/kb.css">
+</head><body>
+<nav class="crumbs"><a href="/freeunit-kb/index.html">index</a> / releases/1.36.0-announcement-en</nav>
+
+<h1>releases/1.36.0-announcement-en</h1>
+
+<h1>🚀 FreeUnit 1.36.0</h1>
+<p>Released July 16, 2026. 307 files changed, +19,034 / −5,581 lines vs 1.35.5.</p>
+<h2>📡 OpenTelemetry — Complete Rewrite</h2>
+<ul><li><strong>OTel SDK upgrade:</strong> Rust crates from 0.24 to 0.32. Exporter rewritten on a dedicated-thread batch span processor — no tokio runtime, blocking reqwest client.</li><li><strong>gRPC returns:</strong> <code>settings/telemetry/protocol</code> = <code>http</code> or <code>grpc</code>. OTLP/gRPC via tonic with minimal tokio runtime, plaintext h2c only (no TLS yet).</li><li><strong>Traceparent:</strong> upstream sampling decision propagated through <code>ParentBased(TraceIdRatioBased)</code> — W3C trace flags are now honoured.</li><li><strong>mock OTLP collector:</strong> <code>test/fake_otlp/</code> and <code>test_otel.py</code> — full test suite covering span export, propagation, sampling, config validation.</li><li><strong>Config validation:</strong> <code>batch_size</code> (1–65536) and <code>sampling_ratio</code> (0–1) now produce clear error messages.</li><li><strong>Logging:</strong> eprintln from the Rust layer replaced with C callback <code>nxt_otel_log_cb</code> — OTel errors flow through standard Unit logging infrastructure.</li></ul>
+<h2>🛠 Bug Fixes</h2>
+<ul><li><strong>Go port-fd double-close:</strong> getUnixConn() duplicated the fd via net.FileConn while a deferred Close() closed the original descriptor — race with libunit, intermittent EBADF. Fixed.</li><li><strong>Cgroup.procs path bounds:</strong> snprintf return value overwrote the length before bounds check — overflow on long paths. Now fails with ENAMETOOLONG.</li><li><strong>Cgroup directory leak:</strong> on pool allocation OOM, the created directory is now removed instead of leaking.</li><li><strong>Proxy keepalive:</strong> after a duplicate or invalid upstream Content-Length, downstream keepalive stays disabled — the client cannot reuse the connection past the re-framed response.</li><li><strong>Static NUL/empty paths:</strong> reject in templated share and chroot paths.</li><li><strong>Controller conn tracking:</strong> coherent connection tracking with full teardown on failure paths.</li><li><strong>H1 buffer chain:</strong> buf chain tail completion after Content-Length trim detaches it.</li></ul>
+<h2>📦 Packaging &amp; Infrastructure</h2>
+<ul><li><strong>Debian rebrand:</strong> full package set renamed — <code>freeunit</code>, <code>freeunit-dev</code>, <code>freeunit-php8.x</code>, <code>freeunit-python3.x</code>, <code>freeunit-perl</code>, <code>freeunit-go</code>, <code>freeunit-wasm</code>, <code>freeunit-jscNN</code>. Binary: <code>/usr/sbin/freeunitd</code>, socket: <code>control.freeunit.sock</code>.</li><li><strong>njs:</strong> contrib upgraded to 1.0.0.</li><li><strong>CI:</strong> ASan+UBSan gate over lifecycle+runtime subsets, seccomp and clang-ast gates.</li><li><strong>Docker:</strong> regenerated Dockerfiles for 1.36.0.</li></ul>
+<hr>
+<h2>🔽 Installation</h2>
+<pre><code>docker pull freeunitorg/freeunit:1.36.0
+docker pull ghcr.io/freeunitorg/freeunit:1.36.0</code></pre>
+<p>Deb packages: <code>https://packages.freeunit.org</code></p>
+<p>Repository: <a href="https://github.com/freeunitorg/freeunit">github.com/freeunitorg/freeunit</a></p>
+<script src="/freeunit-kb/assets/kb.js"></script>
+</body></html>

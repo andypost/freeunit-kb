@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>engineering/x10-job-shim-spike</title>
+<link rel="stylesheet" href="/freeunit-kb/assets/kb.css">
+</head><body>
+<nav class="crumbs"><a href="/freeunit-kb/index.html">index</a> / engineering/x10-job-shim-spike</nav>
+
+<h1>engineering/x10-job-shim-spike</h1>
+<table class="meta"><tr><th>date</th><td>2026-09-11 · <strong>Status:</strong> spike DONE (Python prototyped + executed; C</td></tr><tr><th>artifacts</th><td><code>spikes/unit-job-shim/{job_shim.c, job_asgi.py, acme-reuse.md}</code></td></tr></table>
+<h1>X10 job-shim spike — run long-lived jobs inside Unit, and reuse for ACME</h1>
+<p><strong>Date:</strong> 2026-09-11 · <strong>Status:</strong> spike DONE (Python prototyped + executed; C skeleton written, not compiled — no toolchain on the box) <strong>Artifacts:</strong> <code>spikes/unit-job-shim/{job_shim.c, job_asgi.py, acme-reuse.md}</code></p>
+<h2>Goal</h2>
+<p>Test the X10 counter-argument to upstream's #1528 rejection: that ac000's objection ("<code>external</code> must speak libunit") is satisfiable by a <strong>thin shim on our side</strong>, so a plain long-running command can live inside Unit's runtime.</p>
+<h2>What was built &amp; proven</h2>
+<table><thead><tr><th>Artifact</th><th>Language</th><th>Status</th><th>What it proves</th></tr></thead><tbody><tr><td><code>job_shim.c</code></td><td>C</td><td>written, <strong>not compiled</strong></td><td>the canonical form: parse <code>NXT_UNIT_INIT</code> → <code>nxt_unit_init</code> (handshake) → <code>ready_handler</code> forks+supervises the job → <code>nxt_unit_run</code> = liveness; <code>quit</code> kills child</td></tr><tr><td><code>job_asgi.py</code></td><td>Python</td><td><strong>executed ✓</strong></td><td><strong>no C needed</strong> — Unit's native <code>python</code> module does the libunit handshake; ASGI <code>lifespan.startup</code> IS the ready_handler. Verified: handshake → <code>lifespan.startup.complete</code> sent, job spawned, restart-on-exit observed</td></tr></tbody></table>
+<p><strong>Key result:</strong> the Python path is strictly better on a constrained box (no compiler, no ~800 MB zig/clang, no libunit.a). It reuses a module Unit already ships and tests (<code>test/test_asgi_lifespan.py</code>). <code>job_asgi.py</code> ran a 3.2 s simulation: emitted <code>startup.complete</code>, launched <code>sleep 1</code> as a child, supervised + restarted it, and terminated cleanly on shutdown.</p>
+<h2>Code facts confirmed (grounding)</h2>
+<ul><li><code>src/nxt_external.c</code> <code>nxt_external_start()</code> builds the <code>NXT_UNIT_INIT</code> env blob</li></ul>
+<p>and <code>execve()</code>s the binary — the app must call <code>nxt_unit_init()</code> (<code>src/nxt_unit.c:529</code>) or the router never sees it become <strong>ready</strong> (<code>nxt_router_app_port_ready</code>) → config apply hangs, process untracked (#1528).</p>
+<ul><li>ASGI lifespan wired: <code>nxt_python_asgi.c</code> → <code>nxt_python_asgi_startup()</code> →</li></ul>
+<p><code>nxt_py_asgi_lifespan_startup()</code>; shutdown symmetric. So Python apps get startup/shutdown hooks natively.</p>
+<ul><li><strong>Idle-timer trap confirmed:</strong> <code>nxt_router.c</code> <code>apcf.idle_timeout = 15000</code> (15 s</li></ul>
+<p>default); <code>nxt_router_app_need_start()</code> gates on <code>active_requests</code> / <code>spare_processes</code>. A worker serves nothing → needs <strong><code>idle_timeout:0</code></strong> and <strong><code>spare&gt;0</code></strong> or it is reaped / never eagerly started.</p>
+<h2>Config to run the Python job</h2>
+<pre><code class="language-json">&quot;applications&quot;: {
+  &quot;queue&quot;: {
+    &quot;type&quot;: &quot;python&quot;, &quot;path&quot;: &quot;/opt/jobs&quot;, &quot;module&quot;: &quot;job_asgi&quot;,
+    &quot;callable&quot;: &quot;application&quot;, &quot;processes&quot;: 1, &quot;spare&quot;: 1,
+    &quot;idle_timeout&quot;: 0,
+    &quot;environment&quot;: { &quot;JOB_CMD&quot;: &quot;/usr/local/bin/php artisan queue:work&quot; }
+  }
+}</code></pre>
+<h2>Reuse for ACME (see <code>acme-reuse.md</code>)</h2>
+<p>The same primitive hosts the ACME renewal agent: <strong>one app = scheduler + ACME client + deployer</strong>. <code>lifespan.startup</code> starts a <code>renew_loop</code>; the loop does ACME (cert fetch), the challenge, then <code>PUT /certificates/&lt;name&gt;</code> over the <strong>unix control socket</strong> and re-applies (X9 Step 1). It is the hub that finally <em>uses</em> X9 (PUT-overwrite) + X10 (this primitive) + X11 (modular TLS) + D7 (control auth) together — matching the feature-relationship map in <code>v1/roadmap.md</code>.</p>
+<p>Two-step ladder: <strong>Step A</strong> HTTP-01 (no TLS work, no X11 dependency) → <strong>Step B</strong> TLS-ALPN-01 (needs X11 to select a cert per-ALPN during handshake).</p>
+<h2>Positioning consequence</h2>
+<p>Confirms the X10 framing: this is a <strong>category extension</strong> ("jobs live in the same runtime as apps"), not a completion of upstream. The shim makes upstream's mandatory IPC contract free — so #1528's rejection no longer blocks us.</p>
+<h2>Open items</h2>
+<ul><li>Compile <code>job_shim.c</code> only where a toolchain exists (Hetzner/Scaleway), not here.</li><li>Next spike (when greenlit): <code>acme_asgi.py</code> + self-signed CA round-trip.</li><li>Production must close libunit fds to the child (spike <code>execve</code>s without it).</li></ul>
+<script src="/freeunit-kb/assets/kb.js"></script>
+</body></html>

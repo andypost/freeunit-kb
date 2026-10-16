@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>engineering/scheduled-tasks-plan</title>
+<link rel="stylesheet" href="/freeunit-kb/assets/kb.css">
+</head><body>
+<nav class="crumbs"><a href="/freeunit-kb/index.html">index</a> / engineering/scheduled-tasks-plan</nav>
+<p class="banner warn">IDEA — complements ACME plan + modular TLS</p>
+<h1>engineering/scheduled-tasks-plan</h1>
+<table class="meta"><tr><th>created</th><td>2026-08-22</td></tr><tr><th>context</th><td>If TLS becomes a module (tls.unit.so), a scheduler inside the</td></tr></table>
+<h1>FreeUnit Scheduled Tasks (cron-like) — Plan</h1>
+<p><strong>Created:</strong> 2026-08-22 <strong>Status:</strong> IDEA — complements ACME plan + modular TLS <strong>Context:</strong> If TLS becomes a module (tls.unit.so), a scheduler inside the daemon lets FreeUnit plan its own updates — cert renewal, module swaps, config re-apply — without external cron.</p>
+<hr>
+<h2>Why a scheduler</h2>
+<p>External cron is a second system to deploy and monitor. FreeUnit already has the event loop, timers, and the config API. A small built-in scheduler makes it self-contained:</p>
+<table><thead><tr><th>Use case</th><th>Period</th><th>Today</th><th>With scheduler</th></tr></thead><tbody><tr><td>ACME cert renewal</td><td>~60 days</td><td>external certbot/cron</td><td>built-in</td></tr><tr><td>Module rotation (tls.unit.so swap)</td><td>manual/alert</td><td>manual</td><td>scheduled</td></tr><tr><td>Config re-apply / reload</td><td>manual</td><td>manual</td><td>scheduled</td></tr><tr><td>Health checks / warmup</td><td>minutes</td><td>external</td><td>built-in</td></tr><tr><td>Log rotation</td><td>daily</td><td>external logrotate</td><td>built-in</td></tr></tbody></table>
+<h2>Relation to modular TLS</h2>
+<pre><code>tls.unit.so (OpenSSL today, rustls tomorrow)
+  + scheduler
+    → &quot;renew certs every 55 days&quot; (ACME)
+    → &quot;check for new tls.unit.so, reload on CVE alert&quot;
+    → zero-downtime module swap</code></pre>
+<p>The module + scheduler pair makes FreeUnit self-updating for its own TLS surface without shipping a full auto-updater.</p>
+<h2>Design sketch</h2>
+<p>Config extension (routes/applications level or a new <code>schedules</code> object):</p>
+<pre><code class="language-json">{
+  &quot;schedules&quot;: {
+    &quot;cert-renewal&quot;: {
+      &quot;cron&quot;: &quot;0 3 1 * *&quot;,          /* monthly 3am */
+      &quot;action&quot;: &quot;acme/renew&quot;,        /* built-in handler */
+      &quot;applications&quot;: [&quot;default&quot;]    /* scope */
+    },
+    &quot;module-check&quot;: {
+      &quot;cron&quot;: &quot;0 4 * * *&quot;,
+      &quot;action&quot;: &quot;module/check-update&quot;,  /* downloads+validates tls.unit.so */
+      &quot;notify&quot;: &quot;log|webhook&quot;
+    }
+  }
+}</code></pre>
+<p>Built-in actions (v1):</p>
+<ul><li><code>acme/renew</code> — triggers the ACME flow (from the ACME plan)</li><li><code>module/check-update</code> — checks upstream package, reports</li><li><code>config/reload</code> — re-applies config</li><li><code>app/restart</code> — graceful app restart</li></ul>
+<p>No user scripts at first — only built-in handlers (security: no code exec from config).</p>
+<h2>Security considerations</h2>
+<ul><li>Scheduler actions are <strong>built-in only</strong> (no arbitrary command execution</li></ul>
+<p>from config — matches "config is data" principle)</p>
+<ul><li><code>module/check-update</code> must verify signatures (cosign/minisign) before</li></ul>
+<p>swapping a module</p>
+<ul><li>Never auto-swap a module on failure; report and wait</li><li>Credentials (ACME account key) live in the module/sidecar, not config</li></ul>
+<h2>X10 — upstream rejection (#1528) and why IPC emulation changes the calculus</h2>
+<p><strong>Upstream verdict.</strong> Issue <strong>#1528</strong> «How to run commands alongside "applications"?» (bitsmyth, 2025-01-07) asked to run Laravel <code>queue:work</code> / <code>schedule:work</code> inside Unit and <em>replace Supervisor</em> — declaring them as <code>type: "external"</code>. Maintainer <strong>ac000</strong> closed it in 7 days: <em>«I think this is really <strong>outside the scope of Unit</strong>. … Unit is a web application server … I think you may have <strong>misunderstood what the external application type means</strong>. It doesn't mean you can run any random process.»</em> Author conceded.</p>
+<p><strong>Why it broke (code-level).</strong> <code>type: "external"</code> is not "run this binary". In <code>nxt_external.c</code> <code>nxt_external_start()</code>:</p>
+<ul><li>builds an init blob and writes it to the env var <strong><code>NXT_UNIT_INIT</code></strong>:</li></ul>
+<p><code>"&lt;ver&gt;;&lt;stream&gt;;&lt;proto pid,id,fd&gt;;&lt;router pid,id,fd&gt;;&lt;my pid,id,fd_in,fd_out&gt;;&lt;shm_fd,queue_fd&gt;;&lt;shm_limit,request_limit&gt;"</code>,</p>
+<ul><li>then <code>execve()</code>s the binary.</li></ul>
+<p>The binary <strong>must</strong> call <code>nxt_unit_init()</code>/<code>nxt_unit_read_env()</code> (see <code>nxt_unit.c:529</code>) to parse that blob, connect to the router/proto ports, and signal <em>ready</em> (<code>nxt_router_app_port_ready</code>, router spins on this). A plain <code>php artisan queue:work</code> never does any of it → the router never sees the app become ready → <strong>config apply (<code>curl</code>) hangs</strong> and the process is untracked → <strong>not stopped on reload</strong>.</p>
+<p><strong>So ac000's objection is precise but narrow:</strong> he rejected <code>external</code> <strong>as a generic process runner</strong>, because <code>external</code> implies the <em>request-serving</em> libunit contract.</p>
+<h3>The counter-argument: the IPC contract is small and emulable</h3>
+<p>The libunit contract that <code>external</code> requires is <strong>not</strong> the full request/response data path — for a <em>worker</em> there are no requests to serve. What's actually mandatory is only the <strong>registration/readiness handshake</strong> (parse <code>NXT_UNIT_INIT</code>, open the ports, say "ready"). That is a <strong>tiny, public, stable</strong> surface. Therefore X10 does <strong>not</strong> need an arbitrary-process feature bolted on; it needs a <strong>thin libunit-speaking shim</strong> that:</p>
+<ol><li>performs the <code>NXT_UNIT_INIT</code> handshake once (registers as an app, goes <em>ready</em>),</li><li>then <code>fork/exec</code>s and <strong>supervises</strong> the real long-running command</li></ol>
+<p>(queue worker, cron loop, watcher) — restart on exit, forward signals,</p>
+<ol><li>keeps the port open as a <strong>liveness channel</strong> (heartbeat) so the router keeps it.</li></ol>
+<p>This <em>emulates</em> exactly the IPC the router insists on, and the worker itself never learns about Unit. ac000's "must speak libunit" is satisfied <strong>by a shim on our side</strong>, not by modifying the user's <code>php</code>/<code>node</code>/anything.</p>
+<h3>Why it can "live long" — and the one real trap</h3>
+<p>Long-lived is already native: the router owns a <strong>prototype process</strong> per app and an <strong>idle timer</strong> (<code>nxt_router.c</code>, <code>idle_timeout</code> default <strong>15 s</strong>, <code>apcf.idle_timeout = 15000</code>). Prototype-forked processes persist and share opcache (see <strong>#659</strong>).</p>
+<p>⚠️ <strong>Trap:</strong> the idle timer reaps apps that stop serving. A queue worker serves nothing, so a naive shim would be QUIT'd after 15 s. X10 must therefore:</p>
+<ul><li>set the job's <code>idle_timeout</code> to <strong>0 / infinite</strong> (or a new <code>persistent: true</code> flag),</li><li>and <strong>exclude</strong> job apps from <code>nxt_router_adjust_idle_timer</code>'s reap path.</li></ul>
+<p>With that, the process lives as long as Unit does — and restarts cleanly on Control-API reload, which is <em>more</em> than Supervisor gives (Supervisor survives only via its own daemon + config).</p>
+<h3>Positioning — do NOT frame as "catching up"</h3>
+<p>Upstream <strong>deliberately</strong> scoped jobs out (#1528 is a conscious product boundary, not a missed ticket). So X10 must be sold as a <strong>category extension</strong>, not as fixing an upstream gap:</p>
+<table><thead><tr><th>Frame</th><th>Verdict</th></tr></thead><tbody><tr><td>"Unit forgot a scheduler"</td><td>❌ false — it was declined on purpose</td></tr><tr><td>"New capability: jobs live in the same runtime as apps"</td><td>✅ — unified isolation/rootfs/user/cgroups/telemetry/logging, one Control API, no separate Supervisor daemon</td></tr><tr><td>"One config for web + worker"</td><td>✅ — the concrete win over <code>cron + docker exec + manual env</code></td></tr></tbody></table>
+<p><strong>Concrete competitor = Supervisor / systemd / s6.</strong> The pitch must answer <em>why not just run Supervisor next to Unit</em>: because then you have <strong>two process trees, two configs, two lifecycles</strong> for one app — X10 collapses them.</p>
+<h3>Design consequence</h3>
+<ul><li>Build the <strong>shim + <code>job</code> app type</strong> (or a <code>persistent</code> variant of <code>external</code>) that</li></ul>
+<p>satisfies the libunit handshake and supervises a child.</p>
+<ul><li>Reuse router process management (fork/restart/signal) — do <strong>not</strong> write a second</li></ul>
+<p>supervisor inside the daemon.</p>
+<ul><li>Keep <strong>built-in actions only</strong> (see sketch below): no arbitrary code from config.</li><li>Pair with the <strong><code>/run</code> primitive (Phase B)</strong> for one-shot tasks; the shim covers</li></ul>
+<p>long-lived ones.</p>
+<p><strong>Bottom line:</strong> ac000's rejection rests on the IPC contract being mandatory. It is — but it is small, public, and <strong>emulable on our side</strong>. With a persistent-job flag to defeat the 15-s idle reaper, in-daemon long-lived jobs are sound. X10 is our differentiated bet, and the honest story is <em>"we broaden Unit into jobs,"</em> not <em>"we complete upstream."</em></p>
+<h2>Relation to existing roadmap (andypost/unit)</h2>
+<p>The scheduler is already in <code>roadmap/unit-maintainer.md</code> — not a new idea:</p>
+<ul><li><strong>Phase B:</strong> scheduler primitive phase 1 (<code>/run</code>)</li><li><strong>Phase D:</strong> scheduler config + overlap policies + retries + status</li><li><strong>Strategy:</strong> "Scheduler is not a side feature" — running scheduled tasks</li></ul>
+<p>inside Unit unifies runtime, isolation, rootfs, user, cgroups, telemetry, logging. Replaces fragile "cron + docker exec + manual env replication" setups.</p>
+<ul><li><strong>Design rule:</strong> features appearing in more than one language roadmap are</li></ul>
+<p>implemented in router/controller/libunit first. Scheduler lives in core.</p>
+<p>This KB plan aligns with those phases and adds:</p>
+<ul><li>built-in actions only (no code exec from config)</li><li>module rotation hook (tls.unit.so swap on CVE alert)</li><li>ACME renewal tie-in</li></ul>
+<h2>Priority vs other plans</h2>
+<table><thead><tr><th>Plan</th><th>Relation</th></tr></thead><tbody><tr><td>ACME (PUT-overwrite first)</td><td>scheduler enables auto-renew</td></tr><tr><td>Modular TLS</td><td>scheduler triggers module swap</td></tr><tr><td>Config API</td><td>scheduler re-applies config</td></tr><tr><td>Roadmap Phase B <code>/run</code> primitive</td><td>scheduler is the Phase B/D item</td></tr></tbody></table>
+<p>Scheduler is <strong>after</strong> ACME days-step and modular TLS — it makes both self-driving. It is not a prerequisite for either.</p>
+<h2>Status</h2>
+<table><thead><tr><th>Step</th><th>Effort</th><th>Status</th></tr></thead><tbody><tr><td>ACME PUT-overwrite + re-apply</td><td>days</td><td>NOT STARTED</td></tr><tr><td>TLS as module</td><td>~1 week</td><td>NOT STARTED</td></tr><tr><td>Scheduler primitive (<code>/run</code>)</td><td>Phase B</td><td>IN ROADMAP</td></tr><tr><td>Scheduler config + overlap + retries + status</td><td>Phase D</td><td>IN ROADMAP</td></tr></tbody></table>
+<p><strong>X10 status:</strong> upstream-rejected (#1528) → differentiation bet, not catch-up. Technical feasibility (libunit-shim + persistent flag) worked out — see the X10 section above.</p>
+<script src="/freeunit-kb/assets/kb.js"></script>
+</body></html>

@@ -1,0 +1,132 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>engineering/cgroup-v2-isolation-performance-brief</title>
+<link rel="stylesheet" href="/freeunit-kb/assets/kb.css">
+</head><body>
+<nav class="crumbs"><a href="/freeunit-kb/index.html">index</a> / engineering/cgroup-v2-isolation-performance-brief</nav>
+
+<h1>engineering/cgroup-v2-isolation-performance-brief</h1>
+
+<h1>Isolation research brief — cgroup v2 consequences and performance (2026-10-11)</h1>
+<p><strong>Status: HOLD.</strong> Started only after the <strong>1.37.1 tag exists</strong> (Andrey's sequencing: "сначала закончим 1.37.1"). Recorded here and as an issue in <code>freeunitorg/freeunit-exp</code> so the hold has a gate instead of being re-asked. <strong>Task filed 2026-10-11: <code>freeunitorg/freeunit-exp#22</code></strong> ("Agent task: isolation + cgroup v2 — what Unit places, what the operator must limit, and what it costs", label <code>agent</code>, author <code>freeunit-agent[bot]</code>). Everything below is verified against <code>origin/master</code> on 2026-10-11 (master <code>0f1ec0b1</code>-era tree, 96 commits past <code>1.37.0</code>).</p>
+<h2>1. Verified current state (this is the delta the research starts from)</h2>
+<ul><li><strong>The config surface is placement only.</strong> <code>isolation.cgroup</code> accepts exactly one</li></ul>
+<p>member, <code>path</code> (required, validated by <code>nxt_conf_vldt_cgroup_path</code> — <code>src/nxt_conf_validation.c:1578</code>). Nothing writes a limit file: there is no <code>memory.max</code>, <code>memory.limit_in_bytes</code>, <code>cpu.max</code> writer, no <code>cpu.cfs_*</code>, no <code>subtree_control</code> write anywhere in <code>src/</code>. Unit creates the leaf directory and appends <code>/cgroup.procs</code> (<code>src/nxt_cgroup.c</code>), nothing more. Upstream's own 1.29.0 notes say the same: "we support the cgroup V2 API to provide the ability to place each application into its own cgroup".</p>
+<ul><li><strong>Consequence to document and test:</strong> limits are the operator's job (systemd slice,</li></ul>
+<p>Docker, or hand-written cgroupfs). On a v2 host a leaf whose parent has not enabled the controller in <code>cgroup.subtree_control</code> has <strong>no limit files at all</strong> — limits then read as "unlimited" and nothing fails loudly. That silent-no-op path is the first thing to prove or disprove.</p>
+<ul><li><strong>CPU-limit awareness exists, and only for the router thread count.</strong> <code>nxt_cgroup_cpu_limit()</code></li></ul>
+<p>scans <code>/proc/self/mountinfo</code> + <code>/proc/self/cgroup</code>, walks up reading <code>cpu.max</code> (<code>nxt_cgroup_cpu_max_parse()</code>, <code>src/nxt_lib.c</code>), and lowers <code>nxt_ncpu</code>; the original value stays in <code>nxt_ncpu_unlimited</code> and the record goes to <code>unit.log</code>. It is computed <strong>once at startup</strong>. Work already merged: #548 (lower CPU count to the cgroup v2 limit), #547 (router threads follow it), #576 (log record + cgroup walk tests), #515 (unshare the cgroup namespace after the move). <strong>Open: #659</strong> — <code>nxt_cgroup_mountinfo_find()</code>, keep scanning past unrelated cgroup2 mounts (first mount whose root contains the cgroup; Go and Rust std make the same choice). Tests exist: <code>src/test/nxt_cpu_limit_test.c</code> (9 mountinfo fixtures), <code>src/test/nxt_cgroup_test.c</code>.</p>
+<ul><li><strong>Isolation itself is unshare-after-fork + mount/rootfs</strong>, and needs <code>mount</code>,</li></ul>
+<p><code>umount2</code>, <code>pivot_root</code>, <code>unshare</code>, <code>openat2</code>, i.e. CAP_SYS_ADMIN and a permissive seccomp/AppArmor policy — the decided seccomp/Docker work (<code>engineering/seccomp-isolation-plan-summary.md</code>) covers the <em>syscall-policy</em> half and is a separate track from cgroup semantics. Do not re-open it here.</p>
+<ul><li>Per-process cgroup move reads <code>/proc/&lt;child&gt;/cgroup</code> (not <code>/proc/self/cgroup</code>)</li></ul>
+<p>because the parent may have moved; cleanup walks up to the parent's own cgroup and stops at <code>NXT_CGROUP_ROOT</code>.</p>
+<h2>2. Research questions (each needs a live answer, not an opinion)</h2>
+<ol><li><strong>Delegation on v2.</strong> With <code>subtree_control</code> not carrying <code>+cpu +memory</code> in the</li></ol>
+<p>parent: does Unit still create the leaf and move the app there, and do the limit files exist? What does <code>/status</code> and the app see?</p>
+<ol><li><strong>The "no internal processes" rule.</strong> v2 forbids enabling a controller in a cgroup</li></ol>
+<p>that has members. If the operator points <code>path</code> at a cgroup that already holds processes (unitd's own), what is the failure — <code>EBUSY</code>, <code>EPERM</code>, silent? Which paths are legal for a systemd-managed unitd (<code>Delegate=yes</code>, user service, <code>systemd --user</code>, Docker default cgroup parent)?</p>
+<ol><li><strong>Threaded subtrees.</strong> If an ancestor is <code>cgroup.type=threaded</code>, <code>cgroup.procs</code></li></ol>
+<p>cannot be used (only <code>cgroup.threads</code>). Does the app move fail, and with what errno? Is that reachable in a default container runtime?</p>
+<ol><li><strong>Rootless.</strong> On the rootless stand (user namespace, no root): can the main process</li></ol>
+<p>create/have a cgroup path at all, and what does the CPU-limit walk read when <code>/sys/fs/cgroup</code> is the user's delegated subtree?</p>
+<ol><li><strong>v1/hybrid hosts.</strong> <code>nxt_mk_cgpath()</code> parses <code>/proc/&lt;pid&gt;/cgroup</code>; v1 writes</li></ol>
+<p><code>&lt;id&gt;:&lt;controllers&gt;:&lt;path&gt;</code> and v2 <code>0::&lt;path&gt;</code>. Does the same config land in the right directory on a v1/hybrid host (EL), and is the CPU-limit walk a no-op there (it reads v2 <code>cpu.max</code> only)?</p>
+<ol><li><strong>Where the operator's own numbers come from.</strong> Which documented recipe do we</li></ol>
+<p>recommend per platform (systemd slice with <code>CPUQuota</code>/<code>MemoryMax</code>, Docker <code>--cpus</code> /<code>--memory</code>, hand-written <code>cpu.max</code>/<code>memory.max</code>), and what does Unit need to state so users stop expecting the config to set limits?</p>
+<h2>3. Performance measurements to produce (the second half of the ask)</h2>
+<p>Every number below gets method + version + caveat, per the standing rule.</p>
+<ul><li><strong>ncpu derivation effect.</strong> Many-core host, container limited to N CPUs: router</li></ul>
+<p>thread count and RPS/p95/p99 with the limit honoured vs the pre-#548 behaviour (host ncpu). Does lowering thread count help or hurt short PHP requests? Which N is the crossover?</p>
+<ul><li><strong>Throttling trace.</strong> <code>cpu.stat</code> <code>nr_throttled</code> / <code>throttled_usec</code> for a PHP</li></ul>
+<p>workload with router threads + N workers vs a quota set below them; show the stall pattern rather than asserting "limits are fine".</p>
+<ul><li><strong>Restart-only semantics.</strong> The limit is read once at startup: prove that raising</li></ul>
+<p>the quota at runtime does not change the thread count until unitd restarts, and state it as a documented consequence.</p>
+<ul><li><strong>Memory accounting under v2 with shared opcache.</strong> <code>memory.max</code> is a cgroup</li></ul>
+<p>aggregate; the fork/prototype work shares one opcache SHM across workers and children (measured already: worker 16.1 MB RSS, fork child +11 MB RSS / 3.4 MB PSS). Show what a per-app <code>memory.max</code> counts when N children share one SHM, and whether PSS-style accounting makes the limit plausible or traps users (v2 has no <code>memory.kmem</code> split, has <code>memory.high</code> throttling and <code>memory.swap.max</code> which v1 lacks).</p>
+<ul><li><strong>OOM behaviour per app.</strong> With <code>memory.oom.group</code> unset (default 0) v2 kills a</li></ul>
+<p>single process; with it set, the whole cgroup. Which one does an over-limit PHP app get today, and does Unit's respawn loop turn an OOM into a loop worth alerting on?</p>
+<ul><li><strong>CPU-limit vs worker count interaction.</strong> If the quota is below the configured</li></ul>
+<p><code>processes.max</code>, the app is throttled rather than refused — measure and state the honest reading (the CPU limit does not cap concurrency for I/O-bound PHP, it caps time).</p>
+<h2>4. Deliverables of the research</h2>
+<ol><li>A KB doc with the answers per question, each with the platform/version where it</li></ol>
+<p>was proven (extend this file, dated sections).</p>
+<ol><li>Measurements from §3 with the harness named and reproducible.</li><li>For anything that is a code defect: an issue on <code>freeunitorg/freeunit</code> + a</li></ol>
+<p>failing-first test, not a patch smuggled into an unrelated PR.</p>
+<ol><li>Documentation delta: the docs page must state that Unit <strong>places</strong> and the</li></ol>
+<p>operator <strong>limits</strong>, with one recipe per platform.</p>
+<ol><li>For anything that is a content-grade fact: hand it to the content stream (X /</li></ol>
+<p>LinkedIn) — that is the point of doing it on the <code>-exp</code> side.</p>
+<h2>5. Out of scope</h2>
+<ul><li>Re-opening the seccomp/Docker decision (<code>seccomp-isolation-plan-summary.md</code>).</li><li>Control-API auth (D7) and TLS work.</li><li>Anything touching the 1.37.1 train while it is open.</li></ul>
+<h2>2b. Probe results — phase A (2026-10-11, live)</h2>
+<p>Stand: Scaleway DEV1-M, <strong>Debian 13 Trixie, kernel 6.12.111+deb13-cloud-amd64, 3 vCPU</strong>, cgroup2 mounted <code>rw,nosuid,nodev,noexec,nsdelegate,memory_recursiveprot</code>. Raw log kept with the session; every line below is a live observation, not a reading of the kernel docs.</p>
+<ol><li><strong>What systemd leaves enabled at the root:</strong> <code>root subtree_control: cpu memory pids</code></li></ol>
+<p>(of <code>cpuset cpu io memory hugetlb pids rdma misc</code>) — i.e. only those three controllers exist for anything below <code>/</code>, on a stock Trixie install.</p>
+<ol><li><strong>Enabling controllers in an empty cgroup works</strong>, and the children then really do get</li></ol>
+<p>the limit files: after <code>+cpu +memory</code> on <code>e1</code>, its child carries <code>cpu.max</code>, <code>memory.max</code>, <code>memory.high</code>, <code>memory.swap.max</code>, <code>memory.oom.group</code>, <code>pids.max</code>.</p>
+<ol><li><strong>Moving a live process into a non-leaf cgroup fails: EBUSY.</strong> A cgroup that has</li></ol>
+<p>controllers enabled for its children cannot hold processes (<code>echo $$ &gt; e1/cgroup.procs</code> → <em>write error: Device or resource busy</em>), while the same write into the child <code>e1/leaf</code> succeeds.</p>
+<ol><li><strong>Enabling a controller in a cgroup that already holds a process fails: EBUSY (errno 16)</strong> —</li></ol>
+<p>the "no internal processes" rule, proven directly.</p>
+<ol><li><strong>A child of a cgroup that never enabled a controller has NO limit files at all</strong> —</li></ol>
+<p><code>e2/leaf2</code> lists only <code>cgroup.<em></code>, <code></em>.pressure</code> and <code>cpu.stat</code>/<code>cpu.stat.local</code>, and <strong>has no <code>memory.max</code></strong>. This is the silent no-op the brief predicted: nothing fails, the limit simply cannot be expressed there.</p>
+<ol><li><strong>Threaded targets are unusable for placement:</strong> after <code>cgroup.type=threaded</code>,</li></ol>
+<p>writing a thread-group id to <code>cgroup.threads</code> → <strong>EOPNOTSUPP (95)</strong>, and writing a process to <code>cgroup.procs</code> → <strong>EOPNOTSUPP (95)</strong>. Unit places applications by writing <code>cgroup.procs</code>, so a threaded target cannot work.</p>
+<ol><li><strong>A systemd service without <code>Delegate=yes</code>:</strong> the unit's own cgroup has <code>memory.max</code></li></ol>
+<p>(systemd can limit the service itself; <code>controllers: memory pids</code>, <code>subtree_control:</code> empty) but a <strong>child of it has NO <code>memory.max</code></strong>, and enabling <code>+memory</code> on the service cgroup by hand fails with <strong>EBUSY</strong> because the service already holds its processes.</p>
+<ol><li><strong><code>Delegate=yes</code> alone does NOT fix it.</strong> The delegated service cgroup still showed an</li></ol>
+<p>empty <code>subtree_control</code>, its child again had no <code>memory.max</code>, and the manual <code>+memory +cpu</code> write failed with <strong>EBUSY</strong> for the same reason (the cgroup holds processes). Conclusion: on systemd, delegation must be combined with a <strong>process-free parent</strong> for the app cgroups, or the limits stay unreachable.</p>
+<ol><li><strong>Rootless works only inside the user manager's own subtree:</strong> the user manager cgroup</li></ol>
+<p>(<code>user.slice/user-&lt;uid&gt;.slice/user@&lt;uid&gt;.service</code>) already has <code>subtree_control: cpu memory pids</code>, a non-root user CAN <code>mkdir</code> there, and the created child carries the full limit file set. Anywhere outside that subtree the user cannot create cgroups at all.</p>
+<p>Consequences for the product (to be confirmed in phase B, live, with unitd):</p>
+<ul><li>The config surface (<code>path</code> only) is not the whole story: with a RELATIVE path Unit</li></ul>
+<p>creates the leaf under <strong>unitd's own cgroup</strong>, which by construction holds unitd's processes → per finding 3/4 that leaf can never receive limit files. The usable recipe is an <strong>absolute</strong> path into a process-free, controller-enabled parent.</p>
+<ul><li>The documentation delta is therefore two sentences, not one: *Unit places the</li></ul>
+<p>application; the operator creates a process-free parent with the controllers enabled and sets the limits there* — with a per-platform recipe (systemd: a delegated, empty parent; container: the runtime's cgroup parent; bare cgroupfs: <code>mkdir</code> + <code>+cpu +memory</code>).</p>
+<ul><li>Threaded targets (finding 6) deserve an explicit, loud refusal rather than a generic</li></ul>
+<p>failure — that is a candidate code finding, not a docs note.</p>
+<h2>2c. Probe results — phase B, with unitd running (2026-10-11, live)</h2>
+<p>Same stand class (Scaleway DEV1-M, <strong>Debian 13 Trixie, kernel 6.12.111, 3 vCPU</strong>). FreeUnit built from <code>master</code> with the Python module, <strong><code>unitd 1.37.0</code></strong>, run as a systemd service with <code>Delegate=yes</code>. All lines below are live observations.</p>
+<p><strong>Build recipe verified (the module is a SECOND configure pass):</strong> <code>./configure --prefix=/usr/local --statedir=/var/lib/unit</code> → <code>rc=0</code>, then <code>./configure python --config=python3-config</code> → <code>rc=0</code>, *"configuring Python module …</p>
+<ul><li>Python module: python3.unit.so"*, <code>make</code>/<code>make install</code> clean, module installed as</li></ul>
+<p><code>python3.unit.so</code>. Without the common pass the module pass refuses (<em>"Please run common configure before configuring module"</em>), and with no module at all every <code>PUT /config</code> is rejected with <em>The module to run "python" is not found</em> — so a stand can look healthy while no application can start at all. Debian needs <code>libpcre2-dev</code> for the common pass.</p>
+<ol><li><strong>RELATIVE <code>path</code> places the app but leaves no limit surface.</strong> With</li></ol>
+<p><code>"isolation": {"cgroup": {"path": "fu/app"}}</code> the PUT answers <em>Reconfiguration done</em>, the app starts and serves (<code>200 ok pid 5413</code>), and Unit creates <code>/sys/fs/cgroup/&lt;unitd's service cgroup&gt;/fu/app</code> holding the app's pids. The leaf contains <strong>no <code>memory.max</code>, no <code>cpu.max</code>, no <code>pids.max</code>, no <code>memory.current</code></strong> — only <code>cpu.pressure</code>, <code>cpu.stat</code>, <code>io.pressure</code>, <code>memory.pressure</code> and the <code>cgroup.*</code> files. The limit surface simply does not exist there, exactly as the earlier "no controllers enabled in the parent" case predicts. The app runs happily; nothing warns.</p>
+<ol><li>**ABSOLUTE <code>path</code> into a process-free, controller-enabled parent gives the full limit</li></ol>
+<p>surface.<strong> <code>mkdir /sys/fs/cgroup/fuapps</code> + <code>echo '+cpu +memory +pids' &gt; fuapps/cgroup.subtree_control</code>, then <code>"path": "/fuapps/app"</code> → <code>/sys/fs/cgroup/fuapps/app</code> carries <code>memory.max</code>, <code>memory.high</code>, <code>memory.swap.max</code>, <code>cpu.max</code>, <code>cpu.weight</code>, <code>pids.max</code>, <code>memory.oom.group</code>, and <code>memory.max=64M</code> / <code>cpu.max=50000 100000</code> / <code>memory.oom.group=0</code> are all accepted. </strong>This is the operator recipe.**</p>
+<ol><li><strong>Throttling is real and measurable.</strong> Two CPU-bound requests under a 0.5-CPU quota:</li></ol>
+<p><code>cpu.stat</code> moved from <code>nr_periods 1 / nr_throttled 0</code> to <strong><code>nr_periods 25 / nr_throttled 24 / throttled_usec 3 452 680</code></strong> (~1.35 s of CPU work). A quota below the work stalls it in 100 ms slices; the limit caps time, not concurrency.</p>
+<ol><li><strong>Per-app OOM (measured).</strong> Under <code>memory.max=64M</code>, a request that allocates ~160 MB</li></ol>
+<p>returns <strong>HTTP 503</strong>; <code>memory.events</code> = <strong><code>max 37, oom 1, oom_kill 1, oom_group_kill 0</code></strong>, <code>memory.peak</code> = <code>67 108 864</code> (the cap exactly), the log shows <em>app process … exited on signal 9</em>, <strong>unitd survived</strong> and respawned the app, and the next request returned 200 with a new pid. So with <code>oom.group=0</code> the kernel kills ONE process of the app, not the cgroup, and Unit's supervision turns it into a restart.</p>
+<ol><li><strong>The CPU-limit derivation is visible in the product.</strong> With</li></ol>
+<p><code>systemctl set-property unit.service CPUQuota=100%</code> the service cgroup shows <code>cpu.max 100000 100000</code> and <code>unit.log</code> carries <strong><code>the cgroup CPU limit lowers the CPU count from 3 to 1</code></strong>; router threads dropped 4 → 2 in the same comparison (no quota: 4). The record is written at startup, i.e. a quota change needs a restart to take effect — and with no quota no record is written.</p>
+<ol><li><strong>Throughput: no claim made.</strong> Same <code>ab -k -n 4000 -c 50</code> against the Python WSGI app:</li></ol>
+<p>with the 1-CPU service quota <strong>3502 rps</strong>, without it <strong>2927 rps</strong> — single runs, the gap is inside run-to-run noise and the app does not saturate 3 vCPU. Recorded here only as "the thread-count reduction did not visibly hurt", NOT as a performance result.</p>
+<ol><li><strong>OPEN — threaded target.</strong> Unit accepted <code>"path": "/e4/t"</code> into a cgroup whose</li></ol>
+<p><code>cgroup.type</code> is <code>threaded</code> (<em>Reconfiguration done</em>) and the app served 200, while our direct kernel-level write of a process into a threaded cgroup failed with <code>EOPNOTSUPP</code> (phase A, finding 6). Which cgroup the app's processes actually landed in was <strong>not</strong> verified in this run — one check away (<code>cat /proc/&lt;app pid&gt;/cgroup</code>), and it decides whether the kernel tolerates Unit's placement there or Unit silently left the process where it was.</p>
+<h2>2d. Probe results — phase C, the threaded-target question (2026-10-11, live)</h2>
+<p>Purpose: decide the leftover item from §2c.7. Fresh stand, same class (Debian 13 Trixie, kernel 6.12.111, 3 vCPU), FreeUnit built from <code>master</code> (common configure + python module pass, <code>unitd 1.37.0</code>), app = Python WSGI, config uploaded with <code>PUT /config</code>.</p>
+<p><strong>Control (domain target).</strong> <code>"path": "/plain/app"</code> → <em>Reconfiguration done</em>, the app answers <code>200 ok pid 5365</code>, <code>/proc/5365/cgroup</code> reads <strong><code>0::/plain/app</code></strong>, and both the prototype and the app pid are listed in that leaf's <code>cgroup.procs</code>, <code>cgroup.type: domain</code>. Normal.</p>
+<p><strong>Threaded target.</strong> <code>/thr/t</code> with <code>cgroup.type=threaded</code>, parent a normal domain cgroup:</p>
+<ul><li>A direct kernel write of a process into it (python writing its own pid) fails with</li></ul>
+<p><strong><code>EOPNOTSUPP</code> (errno 95)</strong> — reproducing phase A, finding 6.</p>
+<ul><li>Unit's config is nevertheless <strong>accepted</strong>: <code>PUT</code> → <em>Reconfiguration done</em>, the app starts</li></ul>
+<p>and serves, and <code>/proc/&lt;app pid&gt;/cgroup</code> reads <strong><code>0::/thr/t</code></strong> — i.e. Unit <strong>does</strong> place the application inside a threaded cgroup, and the prototype and the app process both end up there (they appear in <code>cgroup.threads</code> on the first attempt).</p>
+<ul><li>The two attempts were <strong>not identical in bookkeeping</strong>: after a unitd restart, that same</li></ul>
+<p>cgroup listed the prototype and app pids in <strong><code>cgroup.procs</code></strong> as well, while on the first attempt only <code>cgroup.threads</code> held them. Recorded as an observation about when Unit writes the pid, not as a defect claim.</p>
+<ul><li><code>unit.log</code> shows an ordinary start-up sequence (<code>prototype started</code>, <code>application started</code>)</li></ul>
+<p>with <strong>no refusal or error line</strong> about the threaded target.</p>
+<p><strong>What this settles and what it does not.</strong> Settled: the earlier A3/§2c.7 suspicion was wrong — Unit's placement into a threaded target does not fail; the kernel refuses a <em>bare</em> process write from outside the threaded subtree, which is not the same operation Unit performs at that point in the app's life. Not settled (still open, and the reason the item stays in the brief): whether a threaded target can carry the per-app limits at all — the run did <strong>not</strong> capture the threaded cgroup's file list or attempt to write <code>cpu.max</code>/<code>memory.max</code> there, so no claim is made about the CPU-bandwidth or memory interface in threaded mode. Product question that remains: should a threaded <code>path</code> be accepted silently, or refused/warned about when the user's intent is evidently a limit?</p>
+<h2>2e. Probe results — phase D, CLOSED: a threaded cgroup carries no limits (2026-10-11, live)</h2>
+<p>Same stand class (Debian 13 Trixie, kernel 6.12.111, 3 vCPU), unitd 1.37.0, app = Python WSGI.</p>
+<p><strong>Control (domain target <code>/dom/app</code>)</strong> — full interface present and writable: <code>memory.max max</code>, <code>cpu.max max 100000</code>, <code>pids.max max</code>, <code>cpu.weight 100</code>, <code>memory.current</code>, and <code>echo 64M &gt; memory.max</code> accepted (<code>rc=0</code>).</p>
+<p><strong>Threaded target (<code>/thr/t</code>, <code>cgroup.type=threaded</code>)</strong> — the interface is <strong>absent</strong>: the directory lists only <code>cgroup.*</code>, <code>cpu.pressure</code>, <code>cpu.stat</code>, <code>io.pressure</code>, <code>memory.pressure</code>. There is <strong>no <code>memory.max</code>, no <code>cpu.max</code>, no <code>pids.max</code>, no <code>memory.current</code>, no <code>cpu.weight</code>, no <code>memory.oom.group</code></strong>, and an attempt to write any of them fails with <strong>EACCES (errno 13)</strong> — cgroupfs refuses to create a file the kernel does not expose there (a plain <code>open(O_CREAT)</code> on a nonexistent cgroup file returns EACCES, not ENOENT). The second threaded variant (<code>/thr2/t2</code>, also <code>threaded</code>) shows the identical empty interface.</p>
+<p><strong>Unit's behaviour is unchanged by that</strong>: <code>PUT</code> → <em>Reconfiguration done</em>, the app starts, serves, and <code>/proc/&lt;pid&gt;/cgroup</code> reads <code>0::/thr/t</code> (and <code>0::/thr2/t2</code>), with the prototype and the app process in <code>cgroup.threads</code>. <code>unit.log</code> carries no refusal about the target; the only line in that window is a teardown artifact of the previous instance (<code>sendmsg(...) failed (32: Broken pipe)</code>), not a placement error.</p>
+<p><strong>Conclusion (the item is closed).</strong> A user who points <code>isolation.cgroup.path</code> at a threaded cgroup gets a placed, running application and <strong>no way to limit it</strong> — the CPU, memory and pids interfaces do not exist in threaded mode, and Unit neither warns nor refuses. That is a product decision, not an open measurement: either the config should be refused/warned at validation (the operator's evident intent when naming a cgroup is to limit it), or the docs must state the limitation. Combined with §2c.1, the same silent-unenforceability now has two confirmed shapes: <strong>relative path</strong> (no interface because the parent enables nothing) and <strong>threaded target</strong> (no interface by kernel design).</p>
+<h2>Related</h2>
+<ul><li><code>engineering/seccomp-isolation-plan-summary.md</code> — syscall policy half (decided)</li><li><code>engineering/readiness-capget-rootfs.md</code>, <code>engineering/capget-fallback-plan.md</code> —</li></ul>
+<p>adjacent isolation-side fixes</p>
+<ul><li><code>engineering/fork-spawn-drupal-measurement.md</code> — the shared-opcache memory numbers</li><li><code>releases/1.37.1-plan.md</code> — the release that gates this work</li></ul>
+<script src="/freeunit-kb/assets/kb.js"></script>
+</body></html>

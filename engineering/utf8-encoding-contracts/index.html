@@ -1,0 +1,192 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>engineering/utf8-encoding-contracts</title>
+<link rel="stylesheet" href="/freeunit-kb/assets/kb.css">
+</head><body>
+<nav class="crumbs"><a href="/freeunit-kb/index.html">index</a> / engineering/utf8-encoding-contracts</nav>
+
+<h1>engineering/utf8-encoding-contracts</h1>
+
+<h1>Encoding contracts in FreeUnit</h1>
+<p><strong>Why the UTF-8 fixes keep needing follow-ups, and how to stop.</strong></p>
+<p>Base: <code>origin/master</code> @ <code>279e1bb5</code> (#284 merged). PR #304 = <code>origin/fix/json-escape-invalid-utf8</code>. All line numbers re-derived from those commits. Everything marked <em>ran it</em> was executed against a real <code>unitd</code> (1.36.0, <code>build/sbin/unitd</code>) on 2026-09-09; everything else is a code read and says so.</p>
+<hr>
+<h2>0. The call</h2>
+<ol><li><strong>#304 diagnoses a real bug and fixes it in the wrong function.</strong> Its escaping logic is</li></ol>
+<p>provably correct — a brute force over every 1-, 2-, 3- and 4-byte input finds zero overflows and zero slack between the length pass and the print pass. But <code>nxt_conf_json_escape()</code> is not the access log's escaper. It is also the config API's printer, the state-file writer and the router config channel. Landing #304 as written silently rewrites operator config on disk (§3). <strong>Rework, do not merge.</strong></p>
+<ol><li><strong>The reason this keeps happening is that FreeUnit has no encoding contract.</strong> It has</li></ol>
+<p>twenty-five byte boundaries and twenty-five ad-hoc answers (§2). Each fix lands at the sink that was reported. The next sink is still open, so the next report arrives. <code>share</code> got a NUL guard; <code>index</code>, twelve lines away, feeding the same <code>open()</code>, did not — and I served a file through it (§1.2).</p>
+<ol><li><strong>The module cannot express the operation these fixes need.</strong> <code>nxt_utf8_decode()</code> never</li></ol>
+<p>advances on failure, so "replace the bad byte and continue" — what every one of these fixes wants — is an infinite loop with this API. The only loop shape that terminates is "abort the whole string". That is why #304 had to hand-roll its own resync, and it is the root enabler of the treadmill (§4).</p>
+<ol><li><strong>One finding outranks the whole thread: a single request aborts a wasm worker</strong> (§2.2,</li></ol>
+<p>B0). Fix that first and separately.</p>
+<p>The plan is §6. The mechanical gates that make this stick are §7.</p>
+<hr>
+<h2>1. The shape of the treadmill</h2>
+<h3>1.1 The sequence so far</h3>
+<table><thead><tr><th></th><th>what it fixed</th><th>what it left open</th></tr></thead><tbody><tr><td>#284 (merged)</td><td>object-format log injection: every member now goes through the real serializer</td><td>the serializer does no encoding repair</td></tr><tr><td>#304 (open)</td><td>the serializer's encoding repair</td><td>applies it to config too, which is not a log</td></tr><tr><td>not yet filed</td><td>string-format log injection (<code>$uri</code> is percent-decoded)</td><td>—</td></tr><tr><td>not yet filed</td><td>the config API emits non-JSON</td><td>—</td></tr></tbody></table>
+<p>Each entry is the previous entry's blast radius. That is a treadmill, not a sequence of unrelated bugs.</p>
+<h3>1.2 The purest example — <code>share</code> vs <code>index</code></h3>
+<p><code>src/nxt_http_static.c:459</code> rejects an embedded NUL in <code>ctx-&gt;share</code>, with a comment naming <code>open()</code> as the sink. This is the fork's own hardening, and it is correct.</p>
+<p><code>conf-&gt;index</code> is <code>nxt_cpymem</code>'d into <strong>the same buffer, feeding the same <code>open()</code></strong>, at <code>src/nxt_http_static.c:520-522</code>. No guard.</p>
+<p><em>Ran it.</em> With <code>{"share": "&lt;dir&gt;$uri", "index": "a\u0000b"}</code> and a file named <code>a</code> in that directory:</p>
+<pre><code>GET / HTTP/1.1  -&gt;  HTTP/1.1 200 OK
+                    Content-Length: 14
+                    SERVED-FILE-A</code></pre>
+<p>The filename truncated at the NUL and served <code>a</code>. The fix went to the sink that was reported. The sibling sink, in the same function, was not considered — because nothing in the design says <em>where</em> NUL is supposed to be rejected.</p>
+<h3>1.3 The asymmetry that lets it in</h3>
+<p><em>Ran it.</em> The config parser gives opposite verdicts to two spellings of the same thing:</p>
+<table><thead><tr><th>input</th><th>verdict</th></tr></thead><tbody><tr><td><code>"a\ud800b"</code> (escape form)</td><td><strong>400</strong> — "This 6-byte sequence does not represent a valid UTF character"</td></tr><tr><td><code>ED A0 80</code> (raw bytes, same code point)</td><td>accepted, stored, echoed back</td></tr><tr><td><code>C0 AF</code> (overlong solidus)</td><td>accepted, stored, echoed back</td></tr><tr><td><code>FF FE</code> (no valid sequence at all)</td><td>accepted, stored, echoed back</td></tr><tr><td><code>"a\u0000b"</code> (escaped NUL)</td><td><strong>accepted</strong>, stored as a real <code>0x00</code></td></tr></tbody></table>
+<p>The escape path is carefully validated (<code>src/nxt_conf.c:2098-2126</code>). The literal-byte path is one line — <code>src/nxt_conf.c:1924</code>:</p>
+<pre><code class="language-c">if (nxt_fast_path(ch &gt;= &#x27; &#x27;)) {
+    continue;
+}</code></pre>
+<p><code>ch</code> is a <code>u_char</code>, so every byte <code>0x80</code>-<code>0xFF</code> satisfies it, and when a string has no escapes at all the second pass <code>memcpy</code>s it verbatim (<code>src/nxt_conf.c:2040-2042</code>).</p>
+<p><strong>Validation exists for one spelling and not the other.</strong> That is not a missing check; it is a missing contract.</p>
+<hr>
+<h2>2. What a running FreeUnit does today</h2>
+<h3>2.1 Confirmed by execution</h3>
+<p><strong>E1 — the config API emits bytes no JSON parser can read.</strong> PUT a route header-match value containing <code>FF FE</code>; unitd answers <code>Reconfiguration done.</code>, stores it, and returns it verbatim from <code>GET /config</code> under <code>Content-Type: application/json</code> (<code>src/nxt_controller.c:2815</code>). <code>json.loads()</code> on that response body raises <code>UnicodeDecodeError: invalid start byte</code> at offset 144. RFC 8259 §11 gives <code>application/json</code> no charset parameter — JSON text is UTF-8 — so this is a protocol violation, not a cosmetic one.</p>
+<p><strong>E2 — the on-disk state file holds the same bytes.</strong> <code>state/conf.json</code> is not valid UTF-8 after that PUT. <code>nxt_controller_conf_store()</code> (<code>src/nxt_controller.c:2581-2593</code>) uses the same printer.</p>
+<p><strong>E3 — first-party tooling already assumes the contract the core does not enforce.</strong> <code>unitctl</code> parses the config response with <code>serde_json::from_reader</code> (<code>tools/unitctl/unit-client-rs/src/unit_client.rs:284</code>), which requires UTF-8. The Python suite does <code>json.loads</code> (<code>test/unit/control.py:27</code>). <strong>A config <code>unitd</code> accepts and stores cannot be read back by its own tools.</strong></p>
+<p><strong>E4 — string-format access logs can be forged.</strong> <code>$uri</code> is percent-decoded, so <code>%0A</code> becomes a real newline:</p>
+<pre><code>format: &quot;target=$request_line uri=$uri&quot;
+GET /x%0AInjected-Record HTTP/1.1
+-&gt;  target=GET /x%0AInjected-Record HTTP/1.1 uri=/x
+    Injected-Record</code></pre>
+<p>One unauthenticated request writes two records. <code>$request_line</code> is <em>not</em> decoded, so the <strong>default</strong> format is unaffected — the exposure is configs using <code>$uri</code> or <code>$arg_*</code>.</p>
+<p><strong>E5 — the request target carries arbitrary bytes.</strong> <code>nxt_http_target_chars[256]</code> (<code>src/nxt_http_parse.c:48</code>) initialises only its first 64 entries; <code>0x80</code>-<code>0xFF</code> fall through with trap <code>0</code>. <code>GET /caf\xff\xfe HTTP/1.1</code> returns <code>200 OK</code> with the bytes intact in <code>$uri</code> and <code>$request_line</code>.</p>
+<p><strong>E6 — <code>index</code> truncates at NUL.</strong> §1.2.</p>
+<h3>2.2 B0 — one request aborts a wasm worker</h3>
+<p><strong>High. Confirmed by code; not reproduced against a live wasm app (no wasm build here).</strong></p>
+<p><code>src/wasm-wasi-component/src/lib.rs:600</code>:</p>
+<pre><code class="language-rust">std::str::from_utf8(slice).unwrap()</code></pre>
+<p>Reached per request from <code>target()</code> <code>:494</code>, <code>server_name()</code> <code>:487</code>, and both halves of every header field, <code>:511</code> and <code>:513</code>. The entry point is <code>unsafe extern "C" fn request_handler</code> (<code>:175</code>), and <strong>both</strong> Cargo profiles set <code>panic = 'abort'</code> (<code>src/wasm-wasi-component/Cargo.toml:33-37</code>). So it is <code>SIGABRT</code>, not a caught <code>Result</code>, and it takes the worker process with every request in flight on it.</p>
+<p>The input half is confirmed by execution (E5): <code>GET /\xff</code> reaches that <code>.unwrap()</code>, and so does any header value with obs-text, which <code>src/nxt_http_parse.c:663-670</code> permits. The module ships in <code>pkg/deb/Makefile.wasm</code>, <code>pkg/rpm/Makefile.wasm</code> and <code>pkg/docker/Dockerfile.wasm</code>.</p>
+<p><code>git blame</code> puts line 600 in the fork-import commit, so this is inherited from upstream nginx/unit, which is archived and will not fix it.</p>
+<p><strong>The fix is one call</strong>, and the correct pattern is already in this tree: <code>src/otel/src/lib.rs:266</code> uses <code>String::from_utf8_lossy</code> with a comment explaining that header values are arbitrary bytes. The wasi-http WIT interface models header values as <code>list&lt;u8&gt;</code>, so nothing in the component interface objects.</p>
+<h3>2.3 The boundary inventory</h3>
+<p>Twenty-five sites where bytes of unknown encoding meet a consumer that assumes one. The load-bearing rows:</p>
+<table><thead><tr><th>#</th><th>site</th><th>source</th><th>assumes</th><th>validated</th><th>consequence</th></tr></thead><tbody><tr><td>1</td><td><code>src/nxt_conf.c:1924</code></td><td>POSTed config</td><td>JSON is UTF-8</td><td><strong>no</strong></td><td>E1, E2</td></tr><tr><td>2</td><td><code>src/nxt_conf.c:2132</code></td><td><code>\uXXXX</code> escapes</td><td>valid scalar</td><td>surrogates yes, <strong>NUL no</strong></td><td>§1.2</td></tr><tr><td>3</td><td><code>src/nxt_conf.c:2635</code></td><td>every JSON string out</td><td>output is UTF-8</td><td><strong>no</strong></td><td>E1</td></tr><tr><td>10</td><td><code>src/nxt_router_access_log.c:258</code></td><td><code>$uri</code>, <code>$arg_*</code></td><td>text line</td><td><strong>nothing</strong></td><td>E4</td></tr><tr><td>11</td><td><code>src/nxt_http_parse.c:663</code></td><td>header values</td><td>—</td><td>admits <code>0x7F</code>, <code>0x80</code>-<code>0xFF</code></td><td>source for 19, 20</td></tr><tr><td>15</td><td><code>src/nxt_http_request.c:135</code></td><td><code>Host:</code></td><td>hostname</td><td><code>if (ch &gt; ']') continue;</code></td><td>any byte in <code>$host</code></td></tr><tr><td>18</td><td><code>src/nxt_unit.c:1928</code></td><td>WS text frames</td><td>RFC 6455: UTF-8</td><td><strong>none</strong></td><td>B4</td></tr><tr><td>19</td><td><code>src/java/nxt_jni.c:168</code></td><td>header values, URI</td><td>JNI modified UTF-8</td><td><strong>none</strong></td><td>B1</td></tr><tr><td>20</td><td><code>src/wasm-wasi-component/src/lib.rs:600</code></td><td>target, headers</td><td><code>&amp;str</code></td><td><code>.unwrap()</code></td><td><strong>B0</strong></td></tr><tr><td>23</td><td><code>src/nxt_http_static.c:520</code></td><td>config <code>index</code></td><td>NUL-terminated</td><td><strong>none</strong></td><td>§1.2</td></tr></tbody></table>
+<p><strong>And the tree already contains the right answer, twice.</strong> <code>src/otel/src/lib.rs:266</code> uses <code>from_utf8_lossy</code>; njs substitutes U+FFFD in <code>njs_string_decode_utf8</code>. The visible consequence: the same header logs as <strong>raw bytes</strong> through <code>$header_x</code> and as <strong>U+FFFD</strong> through an njs expression. One header, two encodings, decided by which code path renders it.</p>
+<p>Every scripting module is deliberately byte-transparent and correct — Python WSGI latin-1 (<code>src/python/nxt_python.h:21</code>), Ruby ASCII-8BIT, Perl with no <code>SvUTF8_on</code> anywhere, PHP native byte strings, Node latin-1. <strong>Only Java and the wasm component assume UTF-8, and both are wrong.</strong></p>
+<h3>2.4 B4 — WebSocket</h3>
+<p>RFC 6455 §5.6 requires text-frame payloads to be valid UTF-8 and §7.1.5 the same of close reasons; the mandated response is a close with status 1007. Unit validates nothing — <code>NXT_WEBSOCKET_OP_TEXT</code> (<code>src/nxt_websocket_header.h:41</code>) is logged (<code>src/nxt_unit.c:1928</code>) and never branched on.</p>
+<p>The repository says so itself. <code>test/test_asgi_websockets.py:1102</code>:</p>
+<pre><code>#        Unit does not support UTF-8 validation
+#
+#        # 6_3_1 FAIL</code></pre>
+<p>over a disabled Autobahn case feeding <code>\xed\xa0\x80</code>. The failure instead surfaces inside the app: <code>src/nxt_python_asgi_websocket.c:916</code> decodes strict and raises <code>RuntimeError</code> (<code>:920-928</code>) rather than closing per protocol.</p>
+<hr>
+<h2>3. Why #304 is right about the bug and wrong about the location</h2>
+<p>The escaping logic is sound, and this is the one part of #304 that needs no further argument. An independent reviewer built the branch and brute-forced every input of length 1-4 through verbatim copies of both passes, twice: once counting, and once under <code>-fsanitize=address,undefined</code> with an <strong>exactly-sized <code>malloc</code> buffer per case</strong>, so a single-byte overrun would have surfaced as an ASan heap-buffer-overflow report rather than a counter. Both runs: <strong><code>overflows=0</code>, <code>slack=0</code>, max expansion <code>6/1</code></strong> (the sanitized run took 25m30s and exited clean). Since the helper never looks past four bytes or <code>end</code>, that is a complete proof for arbitrary length. There is no heap overflow, no undefined behaviour, and the two passes agree byte for byte.</p>
+<p>The problem is scope. <code>nxt_conf_json_escape()</code> (<code>src/nxt_conf.c:2635</code>) is reached from:</p>
+<table><thead><tr><th>caller</th><th>purpose</th><th>may bytes be rewritten?</th></tr></thead><tbody><tr><td><code>src/nxt_controller.c:2779</code></td><td><code>GET /config</code> response</td><td><strong>no</strong> — the operator gets back what they PUT</td></tr><tr><td><code>src/nxt_controller.c:2593</code></td><td><code>state/conf.json</code></td><td><strong>no</strong> — this is durable operator data</td></tr><tr><td><code>src/nxt_router.c:1960</code></td><td>app config to the worker</td><td><strong>no</strong> — changes what the app receives</td></tr><tr><td><code>src/nxt_router_access_log.c:340</code></td><td>JSON log record</td><td><strong>yes</strong> — this is the one #304 means</td></tr></tbody></table>
+<p>Reproduced by the reviewer against the built branch:</p>
+<pre><code>origin/master:  {&quot;root&quot;:&quot;/srv/caf\xE9&quot;}  -&gt;  {&quot;root&quot;:&quot;/srv/caf\xE9&quot;}
+PR #304:        {&quot;root&quot;:&quot;/srv/caf\xE9&quot;}  -&gt;  {&quot;root&quot;:&quot;/srv/caf�&quot;}</code></pre>
+<p>Non-UTF-8 filesystem paths are legal on Linux. A latin-1 <code>share</code> path or <code>environment</code> value survives a <code>PUT</code>, is rewritten in <code>conf.json</code>, and after the next restart the router opens a <strong>different path</strong>. Worse: object <strong>keys</strong> take the same escaper (<code>src/nxt_conf.c:2502</code> and <code>:2553</code>), so a route header-match key would come back as a different header name — a functional change, not a cosmetic one.</p>
+<p>Two smaller points from the same review, both worth acting on:</p>
+<ul><li><strong>6x amplification, newly reachable.</strong> Emitting the six ASCII bytes of <code>�</code> per bad</li></ul>
+<p>byte costs 6x on attacker-controlled obs-text, where the pre-PR reachable expansion for those bytes was 2x. Raw <code>EF BF BD</code> is 3 bytes and, after JSON decoding, indistinguishable from the escaped form — a genuine U+FFFD in the input is copied through raw anyway, so there is no disambiguation argument for the <code>\u</code> spelling.</p>
+<ul><li><strong>The test's safety claim is false.</strong> <code>src/test/nxt_conf_json_escape_test.c</code> says "under</li></ul>
+<p>the sanitizers it is the ASan report that lands first". It is not: <code>nxt_mp_nget</code> with <code>size</code> ~20 against a 1024-byte-page pool takes the pooled small path, which has no redzone. <code>printed &lt;= size</code> is the only net, and it is checked <em>after</em> the corruption. Since the passes provably agree exactly, assert <code>printed == size</code> plus a canary past <code>size</code> — equality also catches drift in the slack direction, which is the direction a refactor introduces silently.</p>
+<hr>
+<h2>4. The module cannot express what these fixes need</h2>
+<p><code>src/nxt_utf8.c</code> is byte-identical to archived upstream. Its entire production surface is two calls, both in <code>src/nxt_conf.c</code>:</p>
+<ul><li><code>nxt_utf8_encode</code> at <code>:2132</code> — emitting a <code>\uXXXX</code> escape during config parse.</li><li><code>nxt_utf8_length</code> at <code>:2711</code> — computing the <strong>column number</strong> for a parse-error message.</li></ul>
+<p>That second one is the only place in the whole product where UTF-8 validity changes behaviour, and it is cosmetic. Dead in production: <code>nxt_utf8_decode2</code>, <code>nxt_utf8_casecmp</code>, <code>nxt_utf8_lowcase</code>, <code>nxt_utf8_is_valid</code>, and <code>nxt_utf8_next</code>.</p>
+<p><strong>4.1 The decoder accepts surrogates.</strong> The final gate is <code>src/nxt_utf8.c:161</code>, <code>overlong &lt; u &amp;&amp; u &lt; 0x110000</code>. For lead <code>ED</code> the overlong floor is <code>0x07FF</code>, and <code>0x7FF &lt; 0xD800 &lt; 0x110000</code>, so <code>ED A0 80</code> decodes to U+D800 and reports a 3-byte sequence. Unicode 15 Table 3-7 restricts lead <code>ED</code> to trail <code>80..9F</code>. So <code>nxt_utf8_is_valid()</code> — the function whose <em>name</em> promises the guarantee — blesses WTF-8/CESU-8. It is harmless today only because it has no callers, and that is one new caller away from evaporating.</p>
+<p><strong>4.2 The API makes "skip and continue" an infinite loop.</strong> Every error return leaves <code>*start</code> untouched. So this hangs:</p>
+<pre><code class="language-c">while (p &lt; end) {
+    u = nxt_utf8_decode(&amp;p, end);
+    if (u == 0xFFFFFFFF) { continue; }   /* never advances */
+}</code></pre>
+<p>There is no consumed-length and no error class, so a caller wanting "replace and continue" must re-implement the lead-byte length rules itself. <strong>Both production callers take the only escape the API offers — abort the whole string — not because aborting is right for them, but because it is the only shape that terminates.</strong> #304 hand-rolls a one-byte resync for exactly this reason. This is the root enabler: the API shape forces every encoding fix to be local and bespoke.</p>
+<p><strong>4.3 <code>nxt_utf8_next()</code> reads out of bounds.</strong> <code>src/nxt_utf8.h:32-56</code> does <code>do { c = *p; ... } while (p &lt; end)</code> — it dereferences before the bounds test, so a buffer ending in a lead byte overreads by one (ASan-confirmed on a 1-byte allocation holding <code>0xC3</code>). It is dead, so it is a landmine rather than a wound — but it is precisely the helper a future caller would reach for to resynchronise, and its stated contract already disclaims the case where it matters.</p>
+<p><strong>4.4 The test asserts the bug is a feature.</strong> <code>src/test/nxt_utf8_test.c:98</code> is <code>for (u = 0; u &lt; 0x110000; u++)</code> with no surrogate skip, round-tripping encode then decode. D800-DFFF pass. <strong>Any conformance fix breaks this test by design of the test.</strong></p>
+<p><strong>4.5 Dead weight.</strong> <code>nxt_unicode_lowcase.h</code> (38,673 bytes) and <code>nxt_unicode_macosx_lowcase.h</code> (24,356 bytes) are generated from <strong>CaseFolding-6.3.0.txt</strong> — Unicode 6.3.0, September 2013, twelve major releases stale. <code>src/nxt_utf8.c</code> is in <code>NXT_LIB_SRCS</code> (<code>auto/sources:33</code>), so <code>size -A build/src/nxt_utf8.o</code> gives <code>.rodata 12992</code> + <code>.data.rel.ro.local 4168</code> = <strong>~17.2 KB of table data in every <code>unitd</code></strong>, indexed by nothing. Their regenerator, <code>utf8_file_name_test</code>, is built by CI (<code>auto/make:262</code>, <code>.github/workflows/build-test.yml:590</code>) and <strong>never executed</strong>.</p>
+<p><strong>4.6 No fuzz gate.</strong> <code>.github/workflows/fuzzing.yml:5-24</code> gates on <code>src/nxt_http*</code>, <code>src/nxt_h1proto*</code>, <code>src/nxt_conf*</code>, <code>src/nxt_controller*</code>. <strong>Editing <code>src/nxt_utf8.c</code> runs no fuzzer.</strong> And <code>nxt_utf8_fuzz</code> (<code>fuzzing/nxt_basic_fuzz.c:186-197</code>) calls <code>nxt_utf8_decode</code> exactly <strong>once</strong>, not in a loop, so it cannot find a multi-character state bug.</p>
+<hr>
+<h2>5. The design: three contracts, declared per boundary</h2>
+<p>Every boundary in §2.3 gets exactly one label. The labels are not new mechanisms; they are a decision about <em>where</em> the check lives, which is the thing currently missing.</p>
+<p><strong>Contract A — opaque bytes.</strong> The consumer must not assume an encoding, and lengths travel with the data. HTTP bodies, header values handed to applications, every scripting module. <em>Already correct everywhere except Java (B1) and wasm (B0).</em> Enforcement: no encoding code at all, and no <code>strlen</code> on framed data.</p>
+<p><strong>Contract B — UTF-8, enforced by rejection at ingress.</strong> The producer is the operator, who can be told "no". Config JSON, on both the control API and the state file. Enforcement: <strong>the parser</strong>. One check, at <code>src/nxt_conf.c:1924</code>.</p>
+<p><strong>Contract C — UTF-8, enforced by substitution at ingress.</strong> The producer is an anonymous client who cannot be told "no" — you do not reject a request because its User-Agent has a stray byte. Access-log values, and anything else request-derived that must be rendered into a structured format. Enforcement: <strong>substitute U+FFFD as the value enters the structure</strong>, never at the printer.</p>
+<p>From which follows the invariant that makes the printer trivially correct:</p>
+<blockquote><p><strong>Every string inside an <code>nxt_conf_value_t</code> is valid UTF-8.</strong></p></blockquote>
+<p>Contract B establishes it for config by rejecting. Contract C establishes it for log records by substituting. Given the invariant, <code>nxt_conf_json_escape()</code> needs <strong>no encoding logic whatsoever</strong> — its job is quoting, and quoting only. That is why #304 belongs in a different function: it is repairing data at the point where the invariant should already hold, instead of at the point where it is established.</p>
+<p>This also settles the question the earlier plan doc left open ("pick one: <code>\uXXXX</code> or U+FFFD, but state it"). The answer is <strong>both, at different boundaries</strong>: reject where you can, substitute where you cannot, and never repair at the sink.</p>
+<hr>
+<h2>6. The plan</h2>
+<p>Ordered by severity times independence. P0 and P1 are independent of everything else.</p>
+<h3>P0 — <code>wasm-wasi-component</code>: stop aborting on obs-text</h3>
+<p><code>from_utf8</code> to <code>from_utf8_lossy</code> in <code>get_str</code> (<code>src/wasm-wasi-component/src/lib.rs:592-600</code>), matching <code>src/otel/src/lib.rs:266</code>. Return <code>String</code>/<code>Cow&lt;str&gt;</code> instead of <code>&amp;str</code>. Test: a request with <code>\xff</code> in the target and in a header value against a wasm app. Small, urgent, backportable to <code>1.34</code>. <strong>File the issue first</strong> — this is a remote unauthenticated worker abort and may warrant an advisory. Upstream is archived and affected.</p>
+<h3>P1 — <code>nxt_utf8</code>: make the API able to express repair</h3>
+<p>No product behaviour change (every function touched is dead in production except the surrogate gate, which has no production caller).</p>
+<ul><li>Reject surrogates at <code>src/nxt_utf8.c:161</code>, so <code>nxt_utf8_is_valid()</code> means what it says.</li><li>Give the decoder a resync: either advance <code>*start</code> past the <strong>maximal subpart</strong></li></ul>
+<p>(Unicode 15 §3.9, D93b) on failure, or add an out-parameter for bytes consumed. Without this, every future repair site re-implements the byte-length rules, as #304 did.</p>
+<ul><li>Delete <code>nxt_utf8_next()</code> — dead and out-of-bounds (§4.3).</li><li>Delete <code>nxt_utf8_casecmp</code>, <code>nxt_utf8_lowcase</code>, both <code>nxt_unicode_*lowcase.h</code>, the</li></ul>
+<p>generator and <code>utf8_file_name_test</code>: ~17.2 KB of Unicode 6.3.0 data in every binary, reachable from nothing, regenerable from git if ever wanted.</p>
+<ul><li>Fix <code>src/test/nxt_utf8_test.c:98</code> to skip D800-DFFF and assert they are <em>rejected</em>.</li><li>Add <code>src/nxt_utf8*</code> to <code>fuzzing.yml</code> paths, and make <code>nxt_utf8_fuzz</code> loop over the input.</li></ul>
+<h3>P2 — replaces #304: <code>nxt_utf8_sanitize()</code>, applied at the log sink</h3>
+<p><code>nxt_int_t nxt_utf8_sanitize(nxt_mp_t <em>mp, nxt_str_t </em>dst, const nxt_str_t <em>src)</code> — scans, and only allocates when the input is actually invalid (clean strings alias, no copy). Uses P1's resync. Emits raw <code>EF BF BD</code> with maximal-subpart substitution: 3x worst case instead of 6x, one U+FFFD per bad sequence instead of per byte, and it matches what njs and otel already do in this tree. Called from <code>nxt_router_access_log_json()</code> (<code>src/nxt_router_access_log.c:328</code>), on the <code>str</code> returned by <code>nxt_tstr_query()</code>, <strong>before</strong> <code>nxt_conf_set_member_string()</code>. <code>nxt_conf_json_escape()</code> is left untouched — <strong>zero config blast radius</strong>. Keep #304's test, retargeted at the sanitizer: assert <code>printed == size</code> plus a canary past <code>size</code> (§3), and add the five cases the reviewer listed — <code>E0 80 AF</code>, <code>C1 BF</code>, <code>E2 82 7A</code>, <code>F4 90 80 80</code>, and a </em>valid* multi-byte sequence butting against <code>end</code>.</p>
+<h3>P3 — config ingress validation (Contract B)</h3>
+<ul><li>Validate literal-byte runs as UTF-8 in <code>nxt_conf_json_parse_string()</code></li></ul>
+<p>(<code>src/nxt_conf.c:1924</code>), with a parse error in the style of the existing <code>\uXXXX</code> ones, naming the offset. Closes E1, E2 and §1.3.</p>
+<ul><li>Reject <code>\u0000</code> at <code>src/nxt_conf.c:2132</code>. An embedded NUL has no legitimate use in any</li></ul>
+<p>config string and is a path-truncation primitive (§1.2).</p>
+<ul><li><strong>State-file load must sanitize and warn, not reject</strong> — a stored <code>conf.json</code> containing</li></ul>
+<p>these bytes predates the check, and refusing it would brick an upgrade. Reject on the control API; repair on the way in from disk, once, loudly.</p>
+<ul><li>Needs a CHANGES entry: this is a compatibility change.</li></ul>
+<h3>P4 — the <code>index</code> NUL guard</h3>
+<p>P3 makes it unreachable, but add the <code>memchr</code> guard beside its sibling at <code>src/nxt_http_static.c:459</code> anyway. Cheap, and defence in depth is already the house position at that exact spot.</p>
+<h3>P5 — Java: <code>NewStringUTF</code> on raw request bytes (B1)</h3>
+<p><code>src/java/nxt_jni.c:168</code> requires <em>modified</em> UTF-8 and is undefined on invalid input. Two consequences: obs-text corrupts the <code>String</code>, and <strong>any astral-plane character — an emoji in a URI — is mis-decoded</strong>, because modified UTF-8 wants CESU-8 surrogate pairs, not 4-byte sequences. Fix: <code>NewString</code> from an explicitly decoded <code>jcharArray</code>. Header <em>names</em> are safe (the parser restricts them to tchar).</p>
+<h3>P6 — string-format access log escaping</h3>
+<p>The remaining CWE-117 hole (E4). Needs an <code>"escape": "default" | "none"</code> option, nginx's convention, defaulting to <code>default</code>. Behaviour change for every existing deployment, so: own PR, own CHANGES entry, and the advisory for #284 must say the string format remains affected until this lands.</p>
+<h3>P7 — WebSocket UTF-8 validation (B4)</h3>
+<p>RFC 6455 §5.6 / §7.1.5, close status 1007. Largest of these and the least urgent. The payoff is concrete: re-enable the disabled Autobahn cases at <code>test/test_asgi_websockets.py:1102</code> and <code>:1250</code> instead of shipping a comment that says we do not conform.</p>
+<p><strong>Dependencies:</strong> P2 needs P1. P4 is subsumed by P3 but harmless alongside. P0, P5, P6, P7 are independent of everything. <strong>Backportable to <code>1.34</code> cleanly:</strong> P0, P1, P2, P4.</p>
+<hr>
+<h2>7. The gates that stop the next one</h2>
+<p>A plan that relies on remembering this is worth nothing. Each of these is a check that fails loudly:</p>
+<ol><li><strong>A round-trip fuzz target.</strong> <code>nxt_conf_json_parse</code> then <code>nxt_conf_json_print</code>, then</li></ol>
+<p>assert the output is valid UTF-8 and re-parses to the same value. This is the single highest-value addition: it catches E1, E2, the surrogate asymmetry, and any future printer change, without anyone having to think of the case. <code>src/nxt_conf*</code> is already in the fuzz gate.</p>
+<ol><li>**<code>src/nxt_utf8*</code> and <code>src/wasm*</code> added to <code>fuzzing.yml</code> paths** (§4.6).</li><li><strong>A pytest that PUTs each malformed spelling</strong> — raw <code>FF</code>, <code>ED A0 80</code>, <code>C0 AF</code>,</li></ol>
+<p><code>\u0000</code> — and asserts <code>400</code> with a position, after P3. Four assertions, permanently.</p>
+<ol><li><strong>An assertion in the test harness, not in a test.</strong> <code>test/unit/control.py:27</code> already</li></ol>
+<p>does <code>json.loads</code>; make the config response decode explicitly and fail with a clear message. Then <em>every</em> test in the suite is a regression test for E1.</p>
+<ol><li><strong>A grep gate for <code>strlen</code> on framed data</strong> in the module glue — B6</li></ol>
+<p>(<code>src/wasm/nxt_wasm.c:235-244</code> recomputes <code>strlen</code> instead of using the <code>r-&gt;*_length</code> it was handed). Not exploitable today, because it rests on a parser invariant rather than on its own framing. That is the same bet this whole document is about.</p>
+<hr>
+<h2>8. What to do with #304 right now</h2>
+<p>Its author found a real bug, wrote a genuine regression test that fails on <code>master</code> and passes on the branch, and got the hard part — the two-pass byte accounting — provably right. None of that is wasted: it becomes P2 nearly unchanged.</p>
+<p>What has to change is the function it lands in. Post the finding (§3) with the <code>caf\xE9</code> reproduction and the object-key consequence, and ask for it to move to a sanitizer called at <code>src/nxt_router_access_log.c:328</code>, with raw <code>EF BF BD</code> and maximal-subpart resync. The escaper stays as it is: quoting is its job, and after P3 nothing else is needed there.</p>
+<p>Style points a maintainer will raise anyway: <code>nxt_length("\\uFFFD") - 1</code> at <code>src/nxt_conf.c:2656</code> and <code>sizeof("\\u001F") - 2</code> at <code>:2683</code> compute the same thing two ways in one function; the copyright header says <code>NGINX, Inc.</code> where every test this fork has added says <code>F5, Inc.</code>; and <code>auto/sources</code> inserts the new test in the port block rather than beside <code>nxt_conf_parse_test.c</code>.</p>
+<hr>
+<h2>Appendix — reproduction</h2>
+<p>All of §2.1 came from one <code>unitd</code> on a scratch control socket:</p>
+<pre><code class="language-sh">build/sbin/unitd --no-daemon --control unix:/tmp/uc.sock \
+    --pid $S/unit.pid --log $S/unit.log --statedir $S/state --tmpdir $S/tmp
+
+# E1/E2 - invalid UTF-8 round-trips through config and state
+printf &#x27;{&quot;listeners&quot;:{&quot;127.0.0.1:8099&quot;:{&quot;pass&quot;:&quot;routes&quot;}},&quot;routes&quot;:[{&quot;match&quot;:
+  {&quot;headers&quot;:{&quot;X-T&quot;:&quot;caf\xff\xfe-bad&quot;}},&quot;action&quot;:{&quot;return&quot;:200}}]}&#x27; &gt; cfg.json
+curl -s --unix-socket /tmp/uc.sock -X PUT --data-binary @cfg.json http://localhost/config/
+curl -s --unix-socket /tmp/uc.sock http://localhost/config/ | python3 -c \
+  &quot;import json,sys; json.loads(sys.stdin.buffer.read())&quot;   # UnicodeDecodeError
+xxd $S/state/conf.json | grep &#x27;caf&#x27;
+
+# E5 - raw high bytes in the target
+printf &#x27;GET /caf\xff\xfe HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n&#x27; \
+  | nc 127.0.0.1 8099 | head -1                            # HTTP/1.1 200 OK
+
+# E6 - index truncates at NUL
+mkdir -p share &amp;&amp; echo &quot;SERVED-FILE-A&quot; &gt; share/a
+# config: {&quot;share&quot;: &quot;$PWD/share$uri&quot;, &quot;index&quot;: &quot;a\u0000b&quot;}
+curl -s -i http://127.0.0.1:8099/ | head -1                # 200, body &quot;SERVED-FILE-A&quot;</code></pre>
+<p>The socket path must be short — <code>sun_path</code> is 108 bytes and a scratchpad path overflows it.</p>
+<script src="/freeunit-kb/assets/kb.js"></script>
+</body></html>

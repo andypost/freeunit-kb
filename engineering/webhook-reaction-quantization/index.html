@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Webhook reaction quantization</title>
+<link rel="stylesheet" href="/freeunit-kb/assets/kb.css">
+</head><body>
+<nav class="crumbs"><a href="/freeunit-kb/index.html">index</a> / engineering/webhook-reaction-quantization</nav>
+<p class="banner warn">draft</p>
+<h1>Webhook reaction quantization</h1>
+<table class="meta"><tr><th>description</th><td>Batching GitHub webhook events into agent quanta: window, keys, supersession, record, first increment.</td></tr><tr><th>tags</th><td>webhook, coalescing, batching, watermark, design</td></tr></table>
+<h1>Webhook reaction quantization</h1>
+<h2>1. Where quanta form</h2>
+<p><strong>Nothing is stored today.</strong> The route <code>platforms.webhook.extra.routes.freeunit-exp</code> in <code>/opt/data/config.yaml</code> has no <code>coalesce</code> block, so every event passing the filters reaches <code>_spawn_agent_run</code> — one full agent turn each.</p>
+<p>The window is a <strong>Hermes feature that already exists</strong>: <code>gateway/platforms/webhook_coalesce.py</code> (issue #92066), wired into <code>gateway/platforms/webhook.py</code> (<code>WebhookCoalescer</code>, <code>validate_coalesce_config</code>, route key <code>coalesce</code>). Opt-in, agent-mode only (<code>deliver_only</code> / <code>cron_job</code> + <code>coalesce</code> raises <code>ValueError</code> at startup). No new script for the window; a script <em>is</em> needed for the durable record (§4).</p>
+<p>Storage is <code>WebhookCoalescer._pending</code> (+ <code>_timers</code>) in memory on the aiohttp loop; the drainer is <code>_timer</code> → <code>_settle</code> → <code>_spawn_agent_run</code> → <code>handle_message</code>. Window <code>coalesce.window_seconds</code> (default 30), cap <code>coalesce.max_wait_seconds</code> (default 300), delay <code>min(window, max(0, first_at + max_wait − now))</code>. The window restarts on every arrival; the cap counts from the group's <strong>first</strong> event, so a stream cannot starve dispatch.</p>
+<p><strong>While the agent is busy with a previous quantum:</strong> the coalescer does not know a run is live. Dispatch is <code>asyncio.create_task(self.handle_message(event))</code> and <code>webhook.py</code> has no semaphore, so a settling quantum starts a second concurrent session instead of queueing. The window is the only brake. (unverified: whether <code>handle_message</code> serializes per profile.) Durability is process-local: <code>flush()</code> covers disconnect/shutdown; a hard kill loses the window.</p>
+<h2>2. Priority classes</h2>
+<p>Rule — <em>bypass if the event is a direct human address or a new report; normal window if the reaction analyses an entity that can still change within seconds; daily if the value aggregates across many entities.</em></p>
+<ul><li><strong>Bypass</strong> (route <code>freeunit-exp</code>, label <code>direct-address</code>): <code>issue_comment</code> /</li></ul>
+<p><code>pull_request_review_comment</code> / <code>pull_request_review</code> whose <code>payload.comment.body</code> (resp. <code>payload.review.body</code>) contains <code>@freeunit-agent</code>; <code>issues</code> action <code>opened</code>. An unresolved key also bypasses by design — <code>enqueue()</code> returns <code>False</code>, the caller dispatches at once.</p>
+<ul><li><strong>Normal window</strong>: <code>pull_request</code> (opened / reopened / ready_for_review / synchronize),</li></ul>
+<p><code>discussion_comment</code>, <code>workflow_run</code> completed=failure.</p>
+<ul><li><strong>Daily shape</strong>: triage, digests, metrics — stay cron (three digests at 10:30 UTC).</li></ul>
+<h2>3. Coalescing keys and supersession</h2>
+<p><code>coalesce.key</code> is a bare dotted payload field or a <code>{...}</code> template; the group key is <code>"{route}|{rendered}"</code>. Use <code>{{repository.full_name}}#{{number}}</code>. It carries <strong>no event type</strong>, so an <code>issue_comment</code> and a <code>pull_request</code> on one number share a group — one entity, one quantum. A route has one key, and <code>workflow_run</code> exposes no <code>number</code>, so it takes the immediate path.</p>
+<p>Supersession: the newest arrival <strong>replaces</strong> the pending entry (payload, prompt, <code>delivery_id</code>; <code>first_at</code> kept, <code>count</code> incremented) and restarts the timer, so only the latest dispatches. The prompt gains "(Note: N webhook events for this item arrived in quick succession and were coalesced)". Log: <code>[webhook] coalesced delivery &lt;old&gt; superseded by &lt;new&gt; (group=…, N events)</code>.</p>
+<ul><li><strong>Push superseding a push</strong>: same <code>pull_request.number</code> → earlier delivery cancelled, latest</li></ul>
+<p>head wins (read the live head, not the payload sha).</p>
+<ul><li><strong>Repeated workflow run on one commit</strong>: superseded only on the same key; another run/PR number</li></ul>
+<p>forms its own group. Dedupe on <code>(entity, head_sha)</code> in the record.</p>
+<ul><li><strong>Comment arriving after the quantum formed</strong>: before settle → merged; after settle → a</li></ul>
+<p>separate run — the coalescer forgets dispatched groups. That gap is why §4 exists.</p>
+<ul><li><strong>Restart replay</strong>: <code>_record_delivery_id</code> matches <code>X-GitHub-Delivery</code> →</li></ul>
+<p><code>{"status":"duplicate"}</code>, but that map is in-memory.</p>
+<h2>4. Quantum brief and experience record</h2>
+<p>At the tick the agent gets the settled prompt plus the coalesce note. Add a brief from three sources: <strong>changed since last tick</strong> — <code>git log "$prev..$head"</code> over the watermark in <code>/opt/data/cron/change-state.json</code> (<code>head_sha</code>, <code>last_seen_ts</code>); <strong>decided last time</strong> — the last record for the entity; <strong>still open</strong> — the carried-forward list. Never re-read the same commits.</p>
+<p>Record: <code>/opt/data/cron/webhook-reactions.jsonl</code>, append-only, one line per quantum, under the existing lock. Fields: <code>ts</code>, <code>route</code>, <code>entity</code>, <code>event</code>, <code>delivery_id</code>, <code>head_sha</code>, <code>quantum_count</code>, <code>decision</code>, <code>open[]</code>, <code>posted_url</code>. The next tick reads the last N lines for the entity plus the highest <code>head_sha</code>; that IS the brief. No new store.</p>
+<h2>5. Increment 1 (~1 day)</h2>
+<ol><li>Add to the route: `coalesce: {key: "{{repository.full_name}}#{{number}}", window_seconds: 30,</li></ol>
+<p>max_wait_seconds: 300}<code> (</code>validate_coalesce_config` fails on typos).</p>
+<ol><li>Create <code>/opt/data/scripts/webhook-quantum.sh</code>: <code>--brief</code> prints the watermark brief; after the</li></ol>
+<p>run it appends one JSONL line.</p>
+<ol><li>Run: <code>bash /opt/data/scripts/webhook-quantum.sh --brief</code>.</li></ol>
+<p>Compare over 24 h: <code>[webhook] POST event=</code> count vs <code>[webhook] coalesce settled group=</code> count, plus exhaustion rate. Baseline (2026-10-10 15:18 → 2026-10-11 21:33, ~30 h): 21 POST deliveries (~0.7 turns/h), 538 <code>filtered</code> (434 <code>workflow_run</code>), 28 responses, 6 exhausted (21 %), 3 "not posted".</p>
+<h2>Failure modes</h2>
+<table><thead><tr><th>mode</th><th>defence</th></tr></thead><tbody><tr><td>wedged tick</td><td><code>max_wait_seconds</code> caps starvation; watchdog on older groups (unverified: none today)</td></tr><tr><td>lost event</td><td><code>flush()</code> covers graceful disconnect only — accept ≤30 s loss; the watermark catches the entity next tick</td></tr><tr><td>duplicate after restart</td><td>write <code>delivery_id</code> to the JSONL, skip if seen</td></tr><tr><td>self-feedback</td><td><code>freeunit-trusted-senders.txt</code> omits the bot, so its own comments fail the sender filter</td></tr></tbody></table>
+<h2>Metrics for the Oracle Cloud stand</h2>
+<table><thead><tr><th>metric</th><th>why</th><th>collectable today</th></tr></thead><tbody><tr><td>turns per entity per day</td><td>unit cost of a quantum</td><td>yes — <code>[webhook] POST event=</code> in <code>logs/gateway.log</code></td></tr><tr><td>events-in : dispatched</td><td>window effectiveness</td><td>partly — 538 : 21 today; <code>coalesce settled … events=N</code> after increment 1</td></tr><tr><td>filtered ratio by type</td><td>filter cost</td><td>yes — gateway.log</td></tr><tr><td>exhaustion rate</td><td>21 % of runs post nothing</td><td>yes — <code>grep -c 'Iteration budget exhausted'</code></td></tr><tr><td>watermark lag per repo</td><td>compounding needs ticks to advance</td><td>yes — <code>change-state.json</code> <code>last_seen_ts</code></td></tr><tr><td>time-to-comment</td><td>reaction latency</td><td>no (unverified)</td></tr></tbody></table>
+<script src="/freeunit-kb/assets/kb.js"></script>
+</body></html>

@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>engineering/evolver-reference</title>
+<link rel="stylesheet" href="/freeunit-kb/assets/kb.css">
+</head><body>
+<nav class="crumbs"><a href="/freeunit-kb/index.html">index</a> / engineering/evolver-reference</nav>
+
+<h1>engineering/evolver-reference</h1>
+
+<h1>Evolver (andypost/evolver-php) — cross-version static analysis reference</h1>
+<p>_2026-09-04. Reference project: how to make code reading FAST and PRECISE via tree-sitter → symbols → SQLite, instead of semantic/vector search. This is the pattern to replicate for FreeUnit (C), unitctl, and php-src — and it is what the reference for reading code faster and more exactly than context guessing._</p>
+<h2>What Evolver is</h2>
+<p>A PHP 8.5 CLI (Symfony Console) + Amp web UI that uses <strong>tree-sitter via FFI</strong> to analyze Drupal core across git version tags:</p>
+<ol><li><strong>index</strong> — parse all PHP/YAML files with tree-sitter, extract symbols</li></ol>
+<p>(functions, classes, methods, services, routes, permissions) into SQLite</p>
+<ol><li><strong>diff</strong> — compare two indexed versions; detect removals/renames/signature</li></ol>
+<p>changes/new deprecations; generate a tree-sitter query pattern per change</p>
+<ol><li><strong>scan</strong> — run those patterns against your code; report matches + severity</li><li><strong>apply</strong> — mechanical fixes (renames, param inserts, service renames)</li></ol>
+<h2>Why this beats vector (Qdrant) for CODE</h2>
+<ul><li>Code is STRUCTURE, not semantics. You want an exact answer ("who calls X, what</li></ul>
+<p>does X depend on"), not a fuzzy similarity.</p>
+<ul><li>Symbol extraction into SQLite gives <strong>O(1) exact retrieval</strong> by fqn / name /</li></ul>
+<p>signature-hash, plus <strong>set-diff</strong> across versions (EXCEPT is 35% faster than NOT EXISTS for this).</p>
+<ul><li>tree-sitter is <strong>error-tolerant</strong> — works on real code with macros/includes</li></ul>
+<p>(pycparser, a strict AST, failed the whole unit codebase: 0/141 files).</p>
+<ul><li>This is authoritative for the earlier conclusion: **Qdrant = wrong tool for</li></ul>
+<p>code (CPU/RAM, low precision); tree-sitter + SQLite = right tool (exact, cheap).**</p>
+<h2>Architecture (to mirror in Python)</h2>
+<pre><code>CLI  index|diff|scan|apply|report|status|query
+  └─ Service layer  CoreIndexer  VersionDiffer  ProjectScanner  Applier
+       └─ Parser(FFI)  Extractor(PHP/YAML)  PatternMatcher
+            └─ SQLite Storage  versions|files|symbols|changes|matches|snaps</code></pre>
+<h2>Key storage decisions (copy these)</h2>
+<ul><li><strong>SQLite 3 WAL mode</strong>, foreign keys on, parameterized queries (no injection).</li><li><strong>signature_hash = SHA-256(type|fqn|params|return_type)</strong> → O(1) diff vs O(n).</li><li><strong>JSON1</strong>: <code>json_extract()</code> server-side filtering 2-6x faster than PHP-side decode.</li><li><strong>EXCEPT</strong> for set-difference (35% faster than NOT EXISTS).</li><li><strong>Covering index</strong> <code>idx_sym_version_fqn_type_hash</code> → index-only scans for</li></ul>
+<p>signature changes.</p>
+<ul><li><strong>weight</strong> column = <code>major*1e6 + minor*1e3 + patch</code> → quick upgrade-path queries.</li><li><strong>Batch inserts</strong> for bulk writes; <strong>prepared-statement caching</strong> in tight loops.</li><li><strong>Surgical text replacement</strong> by byte offset, applied <strong>bottom-up</strong> (highest</li></ul>
+<p>offset first) to preserve positions. No AST→source round-trip.</p>
+<ul><li><strong>Multi-process</strong>: <code>pcntl_fork</code> for parallel index/scan; workers extract, parent</li></ul>
+<p>merges into SQLite (avoid lock-heavy shared writes). FFI/Parser are process-local, recreated after fork.</p>
+<ul><li><strong>FTS5</strong> (available, we verified) could also index the symbol/body text for a</li></ul>
+<p>content fallback when an exact symbol is unknown.</p>
+<h2>Symbols table (MVP subset — the core)</h2>
+<pre><code>symbols(id, version_id, file_id, name, fqn, symbol_type, parent_symbol,
+        signature_hash, is_deprecated, ast_node_sexp, ast_node_json, source_text)
+CREATE INDEX idx_sym_fqn        ON symbols(fqn);
+CREATE INDEX idx_sym_hash       ON symbols(signature_hash);
+CREATE INDEX idx_sym_deprecated ON symbols(is_deprecated) WHERE is_deprecated=1;
+CREATE INDEX idx_sym_file       ON symbols(file_id);
+CREATE INDEX idx_sym_parent     ON symbols(parent_symbol) WHERE parent_symbol IS NOT NULL;</code></pre>
+<h2>Gotchas learned in Evolver</h2>
+<ul><li><strong>FFI types are instance-scoped</strong> — use <code>$ffi-&gt;new()</code> not <code>FFI::new()</code> (types</li></ul>
+<p>only exist on that FFI instance). For Python this is less of an issue; tree-sitter python bindings are the wrapper.</p>
+<ul><li><strong>tree-sitter CLI on Alpine doesn't load external grammars</strong> — use the FFI/library</li></ul>
+<p>path, not the CLI. (For Python we use the <code>tree-sitter</code> + <code>tree-sitter-c/php</code> wheels, which work — verified on unit: 1935 funcs / 1605 calls in 0.9s.)</p>
+<ul><li><strong>Node::walk() named children only</strong> to avoid infinite recursion on unnamed nodes.</li><li><strong>#[\NoDiscard]</strong> on methods returning values you must use (use (void) to drop).</li></ul>
+<h2>In KB context</h2>
+<p>Replaces the "Qdrant for code" non-starter with an exact-symbol pipeline. Used by:</p>
+<ul><li>an agent reading code → faster and more exactly (index unit + php-src symbols, query by fqn).</li><li>FreeUnit → cross-version breaking-change detection (Drupal-style diff).</li><li>Sofar we verified the PYTHON path works: <code>tree-sitter-c</code> parses unit (1935 defs /</li></ul>
+<p>1605 calls in 0.9s), error-tolerant vs pycparser's 0/141.</p>
+<h2>Related</h2>
+<ul><li><code>engineering/unit-code-graph.md</code> (planned) — Python tree-sitter symbol index for unit.</li><li><code>engineering/ops-environment-facts.md</code> — no gcc/ctags; use tree-sitter via uv.</li></ul>
+<script src="/freeunit-kb/assets/kb.js"></script>
+</body></html>

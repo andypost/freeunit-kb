@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>engineering/syscall-audit-kernel-requirements</title>
+<link rel="stylesheet" href="/freeunit-kb/assets/kb.css">
+</head><body>
+<nav class="crumbs"><a href="/freeunit-kb/index.html">index</a> / engineering/syscall-audit-kernel-requirements</nav>
+
+<h1>engineering/syscall-audit-kernel-requirements</h1>
+
+<h1>Syscall Audit &amp; Kernel Requirements — FreeUnit 1.35.6</h1>
+<p>_Audit date: 2026-07-16 | Branch: pre-1.35.6 (19fe644)_</p>
+<hr>
+<h2>1. Direct Syscalls (via <code>syscall()</code> wrapper)</h2>
+<table><thead><tr><th>Syscall</th><th>Min Kernel</th><th>Fallback</th><th>Usage</th></tr></thead><tbody><tr><td><code>SYS_openat2</code></td><td>5.6</td><td><code>ENOSYS</code> → graceful degrade with warning</td><td>Rootfs isolation (RESOLVE_BENEATH) + file open</td></tr><tr><td><code>SYS_pivot_root</code></td><td>2.6+</td><td><code>#if</code> guard (<code>NXT_HAVE_LINUX_PIVOT_ROOT</code>)</td><td>Rootfs isolation with NEWNS</td></tr><tr><td><code>SYS_memfd_create</code></td><td>3.17</td><td>—</td><td>Shared memory for port communication</td></tr><tr><td><code>SYS_capget</code> / <code>SYS_capset</code></td><td>2.6+</td><td><code>#if</code> guard (<code>NXT_HAVE_LINUX_CAPABILITY</code>)</td><td>Capability detection (read-only)</td></tr><tr><td><code>SYS_getrandom</code></td><td>3.17</td><td><code>getrandom()</code> glibc → <code>getentropy()</code></td><td>Key generation in nxt_random</td></tr><tr><td><code>SYS_gettid</code></td><td>2.6+</td><td><code>gettid()</code> glibc wrapper</td><td>Thread ID (debug/logging)</td></tr></tbody></table>
+<h2>2. Library Wrappers (glibc → syscall)</h2>
+<table><thead><tr><th>Function</th><th>Min Kernel</th><th>Usage</th></tr></thead><tbody><tr><td><code>fork()</code></td><td>2.6+ (POSIX)</td><td>Process spawning — <strong>no <code>clone3</code></strong></td></tr><tr><td><code>epoll_create</code> / <code>epoll_ctl</code> / <code>epoll_wait</code></td><td>2.6+</td><td>Event engine (Linux event loop)</td></tr><tr><td><code>prctl(PR_SET_CHILD_SUBREAPER)</code></td><td>3.4</td><td>Process tree management</td></tr><tr><td><code>prctl(PR_SET_NO_NEW_PRIVS)</code></td><td>3.5</td><td>App process security</td></tr><tr><td><code>mount()</code></td><td>2.6+</td><td>Custom filesystem mounts for apps</td></tr><tr><td><code>umount2()</code></td><td>2.6+</td><td>Cleanup on app exit</td></tr><tr><td><code>signalfd()</code></td><td>2.6.27</td><td>Signal handling</td></tr><tr><td><code>eventfd()</code></td><td>2.6.27</td><td>Event notification</td></tr><tr><td><code>sendfile()</code></td><td>2.6+</td><td>Zero-copy static file serving</td></tr><tr><td><code>fcntl()</code></td><td>POSIX</td><td>FD flags (CLOEXEC, NONBLOCK)</td></tr><tr><td><code>socketpair()</code> / <code>socket()</code></td><td>POSIX</td><td>IPC / listener sockets</td></tr></tbody></table>
+<h2>3. Namespace Flags (compile-time optional)</h2>
+<table><thead><tr><th>Flag</th><th>Guard</th><th>Feature</th></tr></thead><tbody><tr><td><code>CLONE_NEWUSER</code></td><td><code>NXT_HAVE_CLONE_NEWUSER</code></td><td>User namespace</td></tr><tr><td><code>CLONE_NEWPID</code></td><td><code>NXT_HAVE_CLONE_NEWPID</code></td><td>PID namespace</td></tr><tr><td><code>CLONE_NEWNET</code></td><td><code>NXT_HAVE_CLONE_NEWNET</code></td><td>Network namespace</td></tr><tr><td><code>CLONE_NEWUTS</code></td><td><code>NXT_HAVE_CLONE_NEWUTS</code></td><td>Hostname namespace</td></tr><tr><td><code>CLONE_NEWNS</code></td><td><code>NXT_HAVE_CLONE_NEWNS</code></td><td>Mount namespace</td></tr><tr><td><code>CLONE_NEWCGROUP</code></td><td><code>NXT_HAVE_CLONE_NEWCGROUP</code></td><td>Cgroup namespace</td></tr></tbody></table>
+<p>All namespacing is <code>#if</code>-guarded at build time; no runtime probe.</p>
+<h2>4. NOT Used (not yet)</h2>
+<ul><li><code>clone3</code> — FreeUnit uses <code>fork()</code>; no <code>clone()</code> or <code>clone3()</code> anywhere</li><li><code>io_uring</code> — not implemented</li><li><code>seccomp</code> — only mentioned in comments; no <code>prctl(PR_SET_SECCOMP)</code> or <code>seccomp()</code></li><li><code>close_range()</code> / <code>closefrom()</code> — not used</li><li><code>timerfd_create()</code> — not used</li><li><code>pidfd_open()</code> / <code>pidfd_send_signal()</code> — not used</li><li><code>landlock</code> — not used</li><li><code>bpf()</code> / <code>bpf2()</code> — not used</li></ul>
+<h2>5. Minimum Kernel Requirements</h2>
+<table><thead><tr><th>Level</th><th>Kernel</th><th>Reasoning</th></tr></thead><tbody><tr><td><strong>Build (min)</strong></td><td>3.4</td><td><code>PR_SET_CHILD_SUBREAPER</code> (3.4), <code>PR_SET_NO_NEW_PRIVS</code> (3.5)</td></tr><tr><td><strong>Build (recommended)</strong></td><td>5.6</td><td><code>SYS_openat2</code> for rootfs symlink guard</td></tr><tr><td><strong>Runtime (all features)</strong></td><td>5.6</td><td>Full isolation (openat2 + new enough ns)</td></tr><tr><td><strong>Runtime (graceful)</strong></td><td>3.17</td><td>Falls back on openat2 → symlink warning, everything else works</td></tr></tbody></table>
+<h3>Kernel support matrix</h3>
+<table><thead><tr><th>Feature</th><th>Linux &lt; 3.4</th><th>3.4–3.16</th><th>3.17–5.5</th><th>5.6+</th></tr></thead><tbody><tr><td><code>fork()</code> + epoll</td><td>✓</td><td>✓</td><td>✓</td><td>✓</td></tr><tr><td><code>PR_SET_CHILD_SUBREAPER</code></td><td>✗ No child reaper</td><td>✓</td><td>✓</td><td>✓</td></tr><tr><td><code>SYS_memfd_create</code></td><td>✗ No shared mem</td><td>✗</td><td>✓</td><td>✓</td></tr><tr><td><code>SYS_getrandom</code></td><td>✗ Fallback poor</td><td>✗</td><td>✓</td><td>✓</td></tr><tr><td><code>SYS_openat2</code></td><td>✗ No rootfs guard</td><td>✗</td><td>✗</td><td>✓</td></tr></tbody></table>
+<blockquote><p><strong>Distro baseline:</strong> RHEL 8 (4.18), Debian Buster (4.19), Ubuntu 20.04 (5.4) — all at least 4.x. Openat2 (5.6) is the only truly modern gate. Production recommend: <strong>RHEL 9+ / Debian Bullseye+ / Ubuntu 22.04+</strong>.</p></blockquote>
+<h2>6. Docker / Seccomp Interaction</h2>
+<h3>Docker default seccomp profile — per-syscall status</h3>
+<table><thead><tr><th>Syscall</th><th>Default allow?</th><th>Impact</th></tr></thead><tbody><tr><td><code>fork()</code></td><td>✅ Allowed</td><td>—</td></tr><tr><td><code>epoll_create</code> / <code>epoll_ctl</code> / <code>epoll_wait</code></td><td>✅ Allowed</td><td>—</td></tr><tr><td><code>signalfd()</code>, <code>eventfd()</code></td><td>✅ Allowed</td><td>—</td></tr><tr><td><code>sendfile()</code></td><td>✅ Allowed</td><td>—</td></tr><tr><td><code>prctl()</code> (CHILD_SUBREAPER, NO_NEW_PRIVS)</td><td>✅ Allowed</td><td>—</td></tr><tr><td><code>getrandom()</code></td><td>✅ Allowed</td><td>—</td></tr><tr><td><code>memfd_create()</code></td><td>⚠️ Partially</td><td>Allowed in Docker ≥20.10; blocked on older</td></tr><tr><td><code>openat2()</code></td><td>⚠️ Varies</td><td>Allowed in Docker ≥25.x (moby#45988); <strong>blocked on &lt;25.x</strong></td></tr><tr><td><code>capget()</code> / <code>capset()</code></td><td>❌ <strong>Blocked</strong></td><td>See §6.1</td></tr><tr><td><code>mount()</code></td><td>❌ <strong>Blocked</strong></td><td>Needs <code>--security-opt seccomp=unconfined</code> or custom profile</td></tr><tr><td><code>pivot_root()</code></td><td>❌ <strong>Blocked</strong></td><td>Needs <code>--security-opt seccomp=unconfined</code> or custom profile</td></tr></tbody></table>
+<h3>6.1 Critical: <code>capget</code> blocked for non-root containers</h3>
+<p><code>nxt_capability.c</code> calls <code>capget</code> via <code>syscall(SYS_capget)</code> when <code>geteuid() != 0</code>:</p>
+<pre><code class="language-c">if (geteuid() == 0) {
+    cap-&gt;setid = 1;    // skipping capget — works in root containers
+    return NXT_OK;
+}
+// non-root: invokes capget → blocked by Docker seccomp → EPERM</code></pre>
+<p>When <code>capget</code> returns <code>EPERM</code> (Docker default seccomp):</p>
+<ul><li><code>nxt_capability_specific_set()</code> → <code>NXT_ERROR</code></li><li><code>nxt_runtime.c:855</code> catches this → <strong>FreeUnit fails to startup</strong></li></ul>
+<p><strong>Workarounds:</strong></p>
+<ol><li>Run as <code>root</code> inside container (UID 0) — bypasses <code>capget</code> entirely</li><li><code>--security-opt seccomp=unconfined</code> or custom seccomp with <code>capget</code>/<code>capset</code> allowed</li><li><code>--cap-add SYS_PTRACE</code> — Docker ≥23.x includes <code>capget</code> when <code>SYS_PTRACE</code> is granted</li></ol>
+<p>Upstream NGINX Unit docs already advise running <code>unitd</code> as root inside containers (it drops privileges itself). This is consistent.</p>
+<h3>6.2 App isolation inside Docker containers</h3>
+<p>If FreeUnit runs inside Docker and an application config requests:</p>
+<ul><li><strong><code>rootfs</code></strong> with <code>"mounts"</code> — requires <code>mount()</code> + <code>pivot_root()</code> → ❌ blocked</li><li><strong><code>rootfs</code></strong> without mounts (chroot-only) — requires <code>chroot()</code> → ✅ works</li><li><strong>Namespaces</strong> (NEWPID, NEWNET, NEWNS) — requires <code>clone()</code> flag bits in <code>fork()</code> → ⚠️ <code>clone3</code> not used, <code>fork()</code> own NS bits are inherited correctly but some flags (<code>CLONE_NEWNS</code>) need <code>SYS_ADMIN</code> capability</li><li><strong>User namespace (NEWUSER)</strong> — requires <code>SYS_ADMIN</code> or <code>--privileged</code> inside Docker</li></ul>
+<p><strong>Summary for Docker deployment:</strong></p>
+<table><thead><tr><th>Use case</th><th>Works in default Docker?</th><th>Requires</th></tr></thead><tbody><tr><td>Static files</td><td>✅ Yes</td><td>—</td></tr><tr><td>PHP / Python apps (no isolation)</td><td>✅ Yes</td><td>Container runs as root</td></tr><tr><td>PHP / Python apps + simple chroot</td><td>✅ Yes</td><td>—</td></tr><tr><td>PHP / Python apps + mount isolation</td><td>❌ No</td><td><code>--security-opt seccomp=unconfined</code> or custom profile</td></tr><tr><td>PHP / Python apps + rootfs + pivot</td><td>❌ No</td><td><code>--security-opt seccomp=unconfined</code> or <code>--privileged</code></td></tr><tr><td>Capability detection (non-root)</td><td>❌ No</td><td>Run container as root (UID 0)</td></tr></tbody></table>
+<h3>6.3 Debian Trixie specifics</h3>
+<p>Debian Trixie (kernel 6.x) backport notes:</p>
+<ul><li>No new syscall compatibility issues for FreeUnit's current profile</li><li>Docker on Trixie ships with updated seccomp profile (includes <code>openat2</code> if Docker ≥25)</li><li><code>capget</code> remains blocked in default profile — same fix as §6.1</li><li>Kernel headers in Trixie enable all namespace flags at build time reliably</li></ul>
+<hr>
+<h2>7. Granular seccomp profile for FreeUnit in Docker</h2>
+<p>Minimal custom seccomp profile (JSON) to unblock all FreeUnit features in Docker:</p>
+<pre><code class="language-json">{
+  &quot;defaultAction&quot;: &quot;SCMP_ACT_ERRNO&quot;,
+  &quot;architectures&quot;: [&quot;SCMP_ARCH_X86_64&quot;],
+  &quot;syscalls&quot;: [
+    {
+      &quot;names&quot;: [
+        &quot;accept&quot;, &quot;accept4&quot;, &quot;access&quot;, &quot;bind&quot;, &quot;brk&quot;, &quot;capget&quot;, &quot;capset&quot;,
+        &quot;chdir&quot;, &quot;chroot&quot;, &quot;clone&quot;, &quot;close&quot;, &quot;connect&quot;, &quot;dup&quot;, &quot;dup2&quot;,
+        &quot;epoll_create&quot;, &quot;epoll_create1&quot;, &quot;epoll_ctl&quot;, &quot;epoll_wait&quot;,
+        &quot;eventfd2&quot;, &quot;execve&quot;, &quot;exit&quot;, &quot;exit_group&quot;, &quot;fchdir&quot;, &quot;fcntl&quot;,
+        &quot;fstat&quot;, &quot;fsync&quot;, &quot;ftruncate&quot;, &quot;futex&quot;, &quot;getdents64&quot;, &quot;geteuid&quot;,
+        &quot;getpeername&quot;, &quot;getpid&quot;, &quot;getrandom&quot;, &quot;getsockname&quot;, &quot;gettid&quot;,
+        &quot;ioctl&quot;, &quot;listen&quot;, &quot;lseek&quot;, &quot;memfd_create&quot;, &quot;mkdir&quot;, &quot;mmap&quot;,
+        &quot;mount&quot;, &quot;mprotect&quot;, &quot;munmap&quot;, &quot;nanosleep&quot;, &quot;newfstatat&quot;,
+        &quot;open&quot;, &quot;openat&quot;, &quot;openat2&quot;, &quot;pipe2&quot;, &quot;pivot_root&quot;,
+        &quot;poll&quot;, &quot;ppoll&quot;, &quot;prctl&quot;, &quot;read&quot;, &quot;readlink&quot;, &quot;readv&quot;,
+        &quot;recvfrom&quot;, &quot;recvmsg&quot;, &quot;rename&quot;, &quot;rt_sigaction&quot;, &quot;rt_sigprocmask&quot;,
+        &quot;sched_yield&quot;, &quot;sendfile&quot;, &quot;sendmmsg&quot;, &quot;sendmsg&quot;, &quot;sendto&quot;,
+        &quot;set_robust_list&quot;, &quot;set_tid_address&quot;, &quot;setgid&quot;, &quot;setgroups&quot;,
+        &quot;setsockopt&quot;, &quot;setuid&quot;, &quot;shutdown&quot;, &quot;signalfd4&quot;, &quot;socket&quot;,
+        &quot;socketpair&quot;, &quot;stat&quot;, &quot;statx&quot;, &quot;symlink&quot;, &quot;syncfs&quot;, &quot;sysinfo&quot;,
+        &quot;umask&quot;, &quot;umount2&quot;, &quot;uname&quot;, &quot;unshare&quot;, &quot;utimensat&quot;, &quot;vmsplice&quot;,
+        &quot;wait4&quot;, &quot;write&quot;, &quot;writev&quot;
+      ],
+      &quot;action&quot;: &quot;SCMP_ACT_ALLOW&quot;
+    }
+  ]
+}</code></pre>
+<p>Usage: <code>docker run --security-opt seccomp=freeunit-profile.json ...</code></p>
+<hr>
+<h2>8. Recommendations</h2>
+<ol><li><strong>Document kernel baseline</strong> — Document 5.6 as minimum for full feature set, 3.17 as minimum for basic operation</li><li><strong>Document Docker seccomp guidance</strong> — Add Dockerfile note: <code>USER root</code> (not non-root) for official images, or ship a custom seccomp profile</li><li><strong>Consider <code>capget</code> fallback</strong> — Make <code>capget</code> failure non-fatal for non-root containers (treat blocked capget as "no capabilities", continue without setid/chroot)</li><li><strong>No <code>clone3</code> needed</strong> — FreeUnit's <code>fork()</code>-based model avoids the Docker seccomp <code>clone3</code> conflict entirely (good)</li><li><strong>io_uring not on horizon</strong> — Not in pre-1.35.6; when adding, it will require kernel 5.1+ and a new Docker seccomp exception</li><li><strong>Add syscall audit to CI</strong> — Add a CI job that builds on Alpine/musl and runs <code>strace -c unitd</code> to detect syscall drift</li><li><strong>Test matrix</strong> — Add Docker integration tests: default seccomp + root, custom seccomp + isolation, Trixie host</li></ol>
+<h2>9. Docs check via Context7 (2026-10-11)</h2>
+<p>The Linux kernel documentation corpus confirms <strong>semantics but not version floors</strong>: asked for <code>io_uring</code>, <code>epoll_pwait2</code> and <code>MSG_ZEROCOPY</code> it returns the API descriptions and their constraints (a zerocopy buffer must not be modified while the send is in flight; a kTLS control message on receive needs a cmsg buffer or the receive errors) and <strong>no "since Linux N.N" sentence anywhere</strong>. Recommendation 5's "kernel 5.1+" therefore still rests on the man-pages reading; treat it as unverified-by-docs, not as wrong. Wrapper and corpus limits: the <code>context7-docs</code> skill.</p>
+<script src="/freeunit-kb/assets/kb.js"></script>
+</body></html>

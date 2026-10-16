@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>engineering/unit-archive-acme-cron-survey</title>
+<link rel="stylesheet" href="/freeunit-kb/assets/kb.css">
+</head><body>
+<nav class="crumbs"><a href="/freeunit-kb/index.html">index</a> / engineering/unit-archive-acme-cron-survey</nav>
+
+<h1>engineering/unit-archive-acme-cron-survey</h1>
+<table class="meta"><tr><th>source</th><td>local archive of <code>nginx/unit</code> (repo <strong>archived</strong> 2025-10-08 → complete,</td></tr></table>
+<h1>Unit archive survey — ACME / cert / mTLS / scheduler</h1>
+<p><strong>Source:</strong> local archive of <code>nginx/unit</code> (repo <strong>archived</strong> 2025-10-08 → complete, never stale). Full FTS survey, all branches. <strong>Date:</strong> 2026-09-11. Tool: <code>tools/acme_cron_sweep.py</code> + <code>tools/gh_archive.py search</code>.</p>
+<p>Method: swept 1554 items + 8590 comments + 2217 reviews for six themes (ACME/LE, cert lifecycle/rotation, certificates config/API, mTLS/client-certs, scheduler/cron/jobs, TLS-module/SNI/OCSP), then read the top threads in full.</p>
+<h2>Headline findings</h2>
+<ol><li><strong>No built-in ACME, no built-in scheduler — ever.</strong> Position has been</li></ol>
+<p>consistent for 5+ years: external tooling (certbot / sytemd / cron) + Control API. Both are <strong>open, unbuilt feature requests</strong>, not forgotten work.</p>
+<ol><li><strong>A working peer-credential mechanism already exists upstream</strong> — PR <strong>#307</strong></li></ol>
+<p>(i4ki, 2019-09, merged) added <code>SCM_CREDENTIALS/SCM_CREDS</code> cmsg to pass credentials over the control socket and "IPC validations on obvious places". This is the direct ancestor of FreeUnit's <code>nxt_controller_check_peer_cred()</code> (SO_PEERCRED) gate. Upstream had the primitive since 2019; it did <strong>not</strong> ship an auth <em>policy</em> on top.</p>
+<ol><li><strong>mTLS promised in 2021, still absent.</strong> Maintainer <strong>VBart</strong> on #547</li></ol>
+<p>(2021-05-18): <em>"Yes. Something similar to the <code>ssl_verify_client</code> and <code>ssl_client_certificate</code> directives in nginx is planned. No ETA yet, but likely will be implemented this year."</em> Five years on, still open (#225).</p>
+<h2>Theme: ACME / Let's Encrypt</h2>
+<table><thead><tr><th>#</th><th>State</th><th>Title</th><th>Key signal</th></tr></thead><tbody><tr><td><strong>424</strong></td><td>OPEN since 2020-04</td><td>enhancement: Integrated certbot in unit</td><td>The canonical ACME request</td></tr><tr><td>195</td><td>OPEN since 2018-12</td><td>Need a better way to update certificate</td><td>Rotation = 4-step "dance"; PUT overwrite → <code>Certificate already exists</code></td></tr><tr><td>213</td><td>closed</td><td>RFE: systemd improvement</td><td>Cert reload via systemd, not daemon</td></tr></tbody></table>
+<p><strong>#424 thread (the strongest external argument):</strong></p>
+<ul><li><strong>smtalk</strong> (2020): *"Certbot supports post-hooks, it could simply load the cert</li></ul>
+<p>to the unit store"* → "do it externally" (the project's default answer).</p>
+<ul><li><strong>connebs</strong> (2023-11): *"I just decided to go with <strong>Caddy</strong> … because of the</li></ul>
+<p>built-in support for LetsEncrypt."* ← measurable churn to a competitor.</p>
+<ul><li><strong>raix</strong> (2025-02): *"cert management / TLS-ALPN-01 baked into Unit — one of the</li></ul>
+<p>biggest drawbacks compared to Caddy."*</p>
+<h2>Theme: cert lifecycle / rotation</h2>
+<ul><li><strong>#195</strong> (open 2018) — the <strong>PUT-overwrite</strong> request == our <strong>X9 Step 1</strong>.</li></ul>
+<p>Current rotation is a manual dance: delete listener-assoc → delete cert → PUT → re-attach. Maintainer <strong>lcrilly</strong> (2023-12) confirms the delete-then-add flow.</p>
+<ul><li><strong>#547</strong> (closed 2021, but the substance is open) — **mTLS + rotation + cron in</li></ul>
+<p>one thread**: user runs <em>"1 process: unit; 1 daemon/cron: pulling the new certificate … bundling … doing the curl"</em>. tippexs/VBart answer: use <code>docker-entrypoint.d</code>, s6-overlay, consul-template; no in-daemon scheduler. <strong>This is exactly the external-orchestration pattern our X10 proposes to internalise.</strong></p>
+<h2>Theme: certificates config/API</h2>
+<ul><li><strong>#406</strong> (closed 2021) — multiple certificates → shipped in <strong>1.23.0</strong> via SNI</li></ul>
+<p>(<code>listeners</code> SNI matching). <strong>#484</strong> duplicate, closed.</p>
+<ul><li><strong>#618</strong> (closed) — "Unknown parameter certificates" (docs/API confusion).</li><li><strong>#358</strong> (OPEN since 2019-12) — <strong>ECDSA certificate support</strong> missing;</li></ul>
+<p><code>PUT /certificates/...</code> on an EC key → <code>{"error": "Invalid certificate."}</code>. Still open → relevant to any cert/ACME work.</p>
+<h2>Theme: mTLS / client certs</h2>
+<ul><li><strong>#225</strong> (OPEN since 2019-02, 7 yrs) — <em>Support TLS client side certificates</em>.</li><li><strong>tippexs</strong> (2022-12): *"still a very important feature … would mean we have</li></ul>
+<p>to introduce the SSL Client side in NGINX Unit. This task has not been started yet."*</p>
+<ul><li><strong>kylecotter</strong> (2024-09): Cloudflare <strong>Authenticated Origin Pull</strong> needs it.</li><li><strong>#757</strong> (closed, mis-routed) — user asked about disabling OCSP signature</li></ul>
+<p>verification for <strong>client-cert validation</strong>; lcrilly redirected to NGINX. Shows real demand for client-cert policy knobs.</p>
+<h2>Theme: scheduler / cron / jobs</h2>
+<ul><li><strong>#1528</strong> (closed 2025-01) — <strong>DECISIVE for X10</strong>: user wants to *"replace</li></ul>
+<p>Supervisor"<em> and run Laravel <code>queue</code>/<code>schedule</code> long-running commands inside Unit. <strong>ac000</strong> (maintainer, 2025-01-13): </em>"I think this is really <strong>outside the scope of Unit</strong>. … Unit is a web application server and as such expects certain things."* → <strong>in-daemon scheduler actively rejected upstream.</strong> Code-level: <code>external</code> requires the libunit init handshake (<code>NXT_UNIT_INIT</code> env blob + <code>nxt_unit_init()</code>), so a plain worker hangs on reload and is untracked. <strong>Counter-argument + full X10 positioning:</strong> <code>engineering/scheduled-tasks-plan.md</code> § «X10 — upstream rejection (#1528) and why IPC emulation changes the calculus» (a thin libunit shim emulates the mandatory handshake; a <code>persistent</code> flag defeats the 15-s idle reaper).</p>
+<ul><li><strong>#173</strong> (closed) <em>"Clarify timer and epoll"</em>, <strong>#64</strong> (closed) *"[timer] set</li></ul>
+<p>timer parent nil after deleted"<em>, <strong>#659</strong> (OPEN) </em>Idle timeout and prototype processes* — the only "timer" in core is the internal <strong>idle/process-manager timer</strong>, never a user-facing cron. <strong>#659</strong> is the prototype-process lifecycle thread (fork-from-prototype, PHP opcache sharing) — relevant to our P4 plan.</p>
+<ul><li><strong>#1041 / #1015</strong> — loopback/background-task confusion in apps; answered</li></ul>
+<p>"external".</p>
+<h2>Cross-references (touching 2+ themes)</h2>
+<ul><li><strong>#547</strong> — rotation × certs × scheduler × mTLS (the single richest thread).</li><li><strong>#195</strong> — ACME × rotation × certs × OCSP.</li><li><strong>#424</strong> — ACME × rotation × certs.</li><li><strong>#659</strong> — prototype lifecycle (P4-adjacent), under "scheduler" by keyword.</li></ul>
+<h2>Implications for the FreeUnit plan</h2>
+<table><thead><tr><th>Our item</th><th>Upstream precedent</th><th>Status</th></tr></thead><tbody><tr><td><strong>X9 Step 1 (PUT-overwrite)</strong></td><td>#195 (open 2018)</td><td>Directly requested; maintainer acknowledges gap → high PR value</td></tr><tr><td><strong>X9 (built-in ACME)</strong></td><td>#424 (open 2020), Caddy churn</td><td>Long-standing request; strong external argument</td></tr><tr><td><strong>D7 (control-API auth policy)</strong></td><td>#307 (peer-cred primitive, 2019)</td><td>Primitive exists; <strong>policy/auth on top is our differentiation</strong></td></tr><tr><td><strong>mTLS on TCP</strong></td><td>#547/#225 (promised 2021)</td><td>5-yr-old unfulfilled promise → credibly ours</td></tr><tr><td><strong>X10 (in-daemon scheduler)</strong></td><td>#1528 (explicitly rejected 2025)</td><td><strong>NOT an upstream request</strong> — our own bet; frame as new capability</td></tr><tr><td><strong>ECDSA certs</strong></td><td>#358 (open 2019)</td><td>Blocker to verify before any cert work</td></tr></tbody></table>
+<p><strong>Bottom line:</strong> ACME (#424) and PUT-overwrite (#195) are <strong>live upstream requests</strong> our plan addresses. Control-API auth (#307 primitive) and mTLS (#225/#547) are old promises. The <strong>in-daemon scheduler (X10) is upstream-rejected</strong> (#1528) — it is our differentiation, not catch-up. Peer-cred is not novel: it traces to merged PR #307 (2019); our contribution is the policy layer + TCP/mTLS.</p>
+<script src="/freeunit-kb/assets/kb.js"></script>
+</body></html>

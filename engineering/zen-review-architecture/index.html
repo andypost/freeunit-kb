@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>engineering/zen-review-architecture</title>
+<link rel="stylesheet" href="/freeunit-kb/assets/kb.css">
+</head><body>
+<nav class="crumbs"><a href="/freeunit-kb/index.html">index</a> / engineering/zen-review-architecture</nav>
+
+<h1>engineering/zen-review-architecture</h1>
+
+<h1>zen-review architecture — entity-sliced review + local cache (2026-09-03)</h1>
+<p>Two scripts that together give a QUORUM-DRIVEN REVIEW LAYER on top of the quorum toolchain. The client (SOUL / cron) picks an entity and an executor; the layer gathers context, judges (agent) or collects facts (script), and writes a KB history so nothing is lost between sessions.</p>
+<h2>zen_review.py — single entry point</h2>
+<p><code>python3 tools/zen_review.py --pr 254 --mode agent</code> / <code>--issue</code> / <code>--commit</code>.</p>
+<p>Slices by <strong>ENTITY</strong>:</p>
+<table><thead><tr><th>entity</th><th>gather</th><th>intent</th></tr></thead><tbody><tr><td>issue</td><td>body + comments + labels</td><td>root-cause / scope / status</td></tr><tr><td>pr</td><td>body + files + head + diff</td><td>merge judgment, SPOT</td></tr><tr><td>commit</td><td>subject + files + changed symbols</td><td>facts / delta, cheap</td></tr></tbody></table>
+<p>And by <strong>EXECUTOR</strong>:</p>
+<ul><li><code>--mode script</code> — deterministic gather, <strong>no LLM</strong> (facts only). For cron.</li><li><code>--mode agent</code> — runs an LLM quorum (reuses <code>zen_quorum.run_model</code> +</li></ul>
+<p><code>build_prompt</code>) and records verdicts.</p>
+<p>Writes a KB history file <code>engineering/zen-review-&lt;kind&gt;-&lt;num&gt;.md</code> per run: context / tool_calls / findings / verdicts appended (newest on top). This is the "trajectory" — a later session reads it instead of re-gathering.</p>
+<p>Wrappers: <code>zen-models-profile.sh</code> (replaces the old misleadingly-named <code>zen-models-watermark.sh</code>).</p>
+<h2>gh_cache.py — local GitHub + GitLab snapshots, delta by watermark</h2>
+<p><code>python3 tools/gh_cache.py pull --repo freeunitorg/freeunit --prs --issues</code> <code>python3 tools/gh_cache.py pull --backend gl --project alpine%2Faports --prs --author andypost --state opened</code></p>
+<p>Holds a local JSON snapshot of issues/PRs/MRs/comments/reviews and, on refresh, pulls <strong>only the delta</strong> vs a per-item <code>updated_at</code> watermark. Mirrors <code>change-track</code> but for <strong>GitHub entity data</strong>, not repo commits.</p>
+<ul><li><strong>backend <code>gh</code></strong> (GitHub via <code>gh</code>): PR↔PR, issue↔issue, comments, reviews.</li><li><strong>backend <code>gl</code></strong> (GitLab via <code>GITLAB_HOST=... glab api</code>): MR↔PR, issue↔issue</li></ul>
+<p>(by <code>iid</code>), notes→comments require a token → <code>_comments_unavailable</code>.</p>
+<ul><li><strong>keyless</strong> (GitLab public, no token): lists + diffs work anonymously.</li><li><strong>watermark prefix</strong> <code>gh:</code> vs <code>gl:</code> keeps the two backends' watermarks apart.</li><li><strong>pagination</strong> (<code>max_pages</code>), <strong>checkpoint</strong> (save after each item), <strong><code>--limit</code></strong></li></ul>
+<p>(batches for huge repos), <strong>stale-break advisory lock</strong> (single-flight, parallel-safe).</p>
+<ul><li><strong>server-side filters</strong> <code>--author</code> / <code>--state</code> (<code>author_username</code> + <code>state</code>) so a</li></ul>
+<p>busy author's list stays current without pulling hundreds.</p>
+<p>Verified 2026-09-03: <code>pull --backend gl --author andypost --state opened</code> → 9 MRs (non-draft 2 + draft 7), second pull = "no change" (watermark holds).</p>
+<h2>Worked examples in KB</h2>
+<ul><li><code>engineering/zen-review-pr-254.md</code> — script + agent history for #254</li><li><code>engineering/zen-quorum-aports-gcc-internal.md</code> — internal patch review (gcc 16.2.0)</li><li><code>engineering/aports-andypost-mr-activity.md</code> — author snapshot</li></ul>
+<h2>Related</h2>
+<ul><li><code>tools/zen-tools-CHANGELOG.md</code> — the evolving change log for the whole toolchain.</li><li>Skill <code>zen-quorum</code> — operating procedure (incl. "trajectory discipline" rule).</li></ul>
+<script src="/freeunit-kb/assets/kb.js"></script>
+</body></html>

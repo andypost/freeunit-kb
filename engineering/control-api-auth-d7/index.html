@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>engineering/control-api-auth-d7</title>
+<link rel="stylesheet" href="/freeunit-kb/assets/kb.css">
+</head><body>
+<nav class="crumbs"><a href="/freeunit-kb/index.html">index</a> / engineering/control-api-auth-d7</nav>
+
+<h1>engineering/control-api-auth-d7</h1>
+
+<h1>Control API authentication (D7) — status, upstream precedent, design inputs</h1>
+<p>_Research 2026-09-10. Status of the fork's control-plane auth (roadmap D7 / audit-matrix A1) and the historical discussion in upstream <code>nginx/unit</code> — the arguments a team discussion must resolve before implementation._</p>
+<p><strong>⚠️ TO DISCUSS WITH THE TEAM — this is the last open Phase-0 hole (A1, risk R1, weight 9.5).</strong></p>
+<h2>1. What the control API is, and why it is P0</h2>
+<p>The control API is FreeUnit's local REST interface (<code>/config</code>, <code>/certificates</code>, <code>/applications/*</code>, <code>/status</code>). It fully rewrites the running config: add/remove apps, swap listeners, execute code in the worker context. <strong>Whoever reaches the socket gains the authority of the <code>unitd</code> main process</strong> — a privilege boundary, not just a feature.</p>
+<p>Audit-matrix entry: <strong>A1 — Control API authentication</strong>, risk <strong>R1 «control socket takeover → full server compromise»</strong>, weight <strong>9.5</strong>, CRITICAL. Product value: <em>«Enterprise-ready: authenticated control plane»</em> — the only Phase-0 item marketable as its own Enterprise SLA tier.</p>
+<h2>2. What exists in the fork today (not "zero code")</h2>
+<p><code>src/nxt_controller.c:727</code> <code>nxt_controller_check_peer_cred()</code> — commit <strong><code>5f795d19</code></strong> (2026-06-11, shipped <strong>1.36.0</strong>; documented in <code>docs/man/man8/unitd.8.in</code>):</p>
+<pre><code>if (c-&gt;remote-&gt;sa_family != AF_UNIX)  return NXT_OK;     // ← skip on non-unix
+SO_PEERCRED → cred.uid ; if (cred.uid != 0 &amp;&amp; cred.uid != nxt_euid) → reject</code></pre>
+<p>Called from <code>nxt_controller_conn_init():810</code> — a local peer with a different UID is rejected <strong>before the request is read</strong>. So on a UNIX socket (Linux/BSD) there IS a gate. The <code>--control-mode/-user/-group</code> file perms are <strong>defense-in-depth, not the boundary</strong> (man page is explicit).</p>
+<h3>The two gaps that keep A1 open</h3>
+<ol><li><strong>TCP control socket bypasses the gate entirely.</strong> The man page allows <code>--control</code></li></ol>
+<p>in "IPv4, IPv6, or UNIX-domain format", and <code>nxt_sockaddr_parse()</code> (<code>src/nxt_runtime.c:998</code>) parses any form. But the gate is <code>if (sa_family != AF_UNIX) return NXT_OK</code> → <strong>no check on TCP</strong>. <code>--control 0.0.0.0:8080</code> = anyone on the network reads/writes the config. No bearer token, no mTLS, no IP allow-list.</p>
+<ol><li><strong>Same-UID peers pass.</strong> The gate admits <code>cred.uid == nxt_euid</code>. Any process under the</li></ol>
+<p>same user as <code>unitd</code> (including a non-isolated app) walks through legitimately.</p>
+<p><strong>Missing (D7 on roadmap):</strong> bearer-token on <code>/control/*</code>; mTLS; a gate for the TCP control socket; same-UID intra-process distinction; enterprise docs beyond the unix note.</p>
+<h2>3. "Zero artifacts" — precise reading</h2>
+<ul><li><strong>Issue:</strong> search <code>control api auth</code> across all states → <strong>0 results</strong>.</li><li><strong>PR:</strong> search <code>bearer</code>/<code>control-plane</code> → hits #144 (GHSA backport), #280 (start bound),</li></ul>
+<p>#111 (engine refactor) — <strong>all unrelated</strong>.</p>
+<ul><li><strong>Commit:</strong> only relevant = <code>5f795d19</code> (the peer-cred gate). <strong>No token/mTLS code.</strong></li></ul>
+<p>So read the digest line "artifacts: none" as <strong>"no open issue/PR and no bearer/mTLS implementation"</strong> — NOT "nothing in the code". Partial mitigation exists; the full D7 solution has zero artifacts.</p>
+<h2>4. Upstream <code>nginx/unit</code> precedent — the arguments (team discussion input)</h2>
+<h3>#1315 «[Feature Request] Basic Authentication for Control Socket» — OPEN, 2024-06-13 (ivanov17)</h3>
+<p>The direct D7 analogue: Basic Auth on the control API <strong>for a TCP socket</strong> (containers; localhost-only API connections are impractical).</p>
+<ul><li><strong>lcrilly (maintainer):</strong> *«Nice idea, but I think it is insufficient without also making</li></ul>
+<p>the transport confidential (with TLS)»* — Basic Auth without TLS sends the credential in clear.</p>
+<ul><li><strong>ivanov17 (author):</strong> production use (Ansible over the control API); protects against</li></ul>
+<p><em>«an infected container in the same container network»</em>; wants <strong>per-endpoint</strong> choice — leave <code>/status</code> unauthenticated for monitoring, protect config endpoints.</p>
+<ul><li>Open since 2024, <strong>no PR, no closed-by-PR</strong>.</li></ul>
+<h3>#840 → PR #1000 — the upstream philosophy (the counter-argument)</h3>
+<p>#840 «Override control socket permissions» (2023-02, CLOSED). <strong>lcrilly:</strong> *«specify user, group and mode for the Unix socket gives the right flexibility **without needing to switch to a localhost TCP port (which <code>all</code> users can access)»*. Result: <strong>PR #1000</strong> (MERGED 2024-02-19, ac000) added <code>--control-mode/-user/-group</code>. Upstream deliberately chose <strong>unix file perms over TCP auth</strong>. Caveat (crabique): abstract sockets (<code>unix:@aaa</code>) break on <code>chmod("")</code>. → This is why our peer-cred gate (1.36.0) is the natural continuation of upstream's line.</p>
+<h3>#307 「Use socket credential passing (SCM_CREDENTIALS / SCM_CREDS)」 — MERGED 2019 (i4ki)</h3>
+<p><strong>The direct ancestor of our peer-cred gate.</strong> PR #307 added <code>SCM_CREDENTIALS</code>/<code>SCM_CREDS</code> cmsg over the control socket <em>"to avoid having to pass the <code>pid</code> explicitly in the msg payload"</em>, plus <em>"some IPC validations on obvious places. We need to review all comms in the future."</em> Tested Linux/FreeBSD/OSX. So the <strong>credential-passing primitive has existed since 2019</strong> — upstream built the mechanism but never a <em>policy</em> (authz) layer on top. FreeUnit's <code>nxt_controller_check_peer_cred()</code> (SO_PEERCRED, <code>5f795d19</code>) is the policy layer on a 9-year-old primitive; it is <strong>not a novel invention</strong>, which strengthens the D7 case (we complete upstream's own unfinished direction rather than bolt on foreign machinery).</p>
+<h3>#225 «Support TLS client side certificates» — OPEN, 2019-02-25 (zueve)</h3>
+<p>The mTLS half of D7 (<code>ssl_client_certificate</code>, nginx-style). <strong>Open ~7 years, unimplemented.</strong> Why audit-matrix D7 says "bearer-token first, mTLS later".</p>
+<h3>Periphery</h3>
+<ul><li>#1319 (2024, OPEN) — <code>unitctl</code> over SSH to the control socket.</li><li>#1318 (2024, CLOSED) — <code>unitctl</code> deploy to many instances.</li><li>#1266 (2024, OPEN) — CLI labels a TCP control socket as "unix" (cosmetic).</li><li><strong>tippexs (maintainer):</strong> roadmap priority — *«will not find its way into Unit within the</li></ul>
+<p>next two releases»* (1.30 closed, 1.31 = WASM).</p>
+<h2>5. Arguments to resolve in the team discussion</h2>
+<ol><li><strong>Basic-auth without TLS was rejected upstream</strong> (lcrilly) — need TLS/mTLS, not a bare password.</li><li><strong>Upstream chose unix perms over TCP auth</strong> (PR #1000) — "no TCP port all users can reach".</li><li><strong>mTLS stalled since 2019</strong> (#225) — low historical priority.</li><li><strong>Per-endpoint auth</strong> (ivanov17) — <code>/status</code> open, config protected. Strong design input.</li><li><strong>Priority was repeatedly low</strong> (tippexs) — explains why it stayed open, not a technical block.</li></ol>
+<h3>Consequence for our design (proposed direction, to confirm with the team)</h3>
+<ul><li>Keep the <strong>unix peer-cred gate</strong> (already shipped) as the local boundary.</li><li>Add a <strong>bearer-token gate on the TCP control socket</strong> (the actual gap), plus optional mTLS.</li><li>Make it <strong>per-endpoint</strong>: keep <code>/status</code> optionally open for monitoring; protect config/certs.</li><li>Enforce the gate <strong>before <code>nxt_controller_process_request()</code></strong>.</li><li>Preserve <code>unitctl</code> compatibility; document for enterprise (the SLA-tier selling point).</li></ul>
+<h2>6. Open questions for the team</h2>
+<ul><li>[ ] Token model: static bearer vs. mTLS vs. both? Where does the token live?</li><li>[ ] Scope: gate only the TCP path (unix already gated), or all endpoints uniformly?</li><li>[ ] <code>/status</code> and <code>/metrics</code>: authenticated by default, or opt-out for monitoring?</li><li>[ ] Same-UID local processes: is peer-cred sufficient, or do we need a token even on unix?</li><li>[ ] Roadmap slot: which release carries D7 (it is ~3 weeks of work)?</li></ul>
+<h2>7. Architecture option — TLS as a module (X11) — KEY PROPOSAL (2026-09-10)</h2>
+<p>Andrey's proposal: <strong>move all TLS/SSL into a separate loadable module</strong> (<code>tls.unit.so</code>), "OpenSSL today, rustls tomorrow". This <strong>dissolves</strong> the core objection to D7 (§2/§4: "TCP auth needs TLS needs OpenSSL always"). Recorded here because it changes the D7 decision.</p>
+<h3>Why it matters for D7</h3>
+<ul><li>Today TLS is <strong>compile-time</strong> (<code>NXT_TLS</code>, <code>--openssl</code>/<code>--gnutls</code>, default <code>NO</code>) and woven</li></ul>
+<p>into the <strong>hot path</strong> across <strong>14 core files</strong>: <code>nxt_conn.h</code> (<code>u.tls</code>), <code>nxt_conn_write.c</code>, <code>nxt_h1proto.c</code>, <code>nxt_listen_socket.c/.h</code> (<code>ls-&gt;tls</code>), <code>nxt_controller.c</code>, <code>nxt_router.c/.h</code>, <code>nxt_main_process.c</code>, <code>nxt_conf_validation.c</code>, <code>nxt_runtime.h</code>, <code>nxt_main.h</code>, <code>nxt_process.h</code>.</p>
+<ul><li>If TLS is a module, <strong>secure TCP control becomes opt-in</strong>: you install <code>tls.unit.so</code> only</li></ul>
+<p>if you want TLS at all. The core build stays <strong>dependency-free</strong> (no OpenSSL forced on everyone). So "TCP-control requires OpenSSL" → "TCP-control requires the TLS module".</p>
+<h3>Precedent — "rust slim" is already in the tree</h3>
+<table><thead><tr><th>Component</th><th>TLS stack</th><th>Note</th></tr></thead><tbody><tr><td><code>src/otel</code> (Rust)</td><td><strong>none</strong> — deliberately plaintext (comment: rustls would pull aws-lc-sys / a 2nd OpenSSL)</td></tr><tr><td><code>src/wasm-wasi-component</code> (Rust)</td><td><strong>rustls dropped</strong> via <code>default-features=false</code> (removes <code>default-send-request</code>)</td></tr><tr><td><strong><code>tools/unitctl</code> (Rust)</strong></td><td><strong><code>rustls 0.23</code> + <code>hyper-rustls</code></strong> — a working rustls client</td></tr></tbody></table>
+<p>→ A <strong>rustls-based</strong> TLS module is not hypothetical: rustls already ships in <code>unitctl</code>.</p>
+<h3>Module-ABI reality</h3>
+<ul><li>The only dlopen ABI today is <code>nxt_app_module</code> (<code>nxt_application.c:385</code>) — it is **language</li></ul>
+<p>app-module only** (php/python/java/wasm). TLS is NOT an app module.</p>
+<ul><li>So X11 = a <strong>new module category</strong> (vtable interface replacing the <code>#if (NXT_TLS)</code> sites),</li></ul>
+<p>not a reuse of <code>nxt_app_module</code>. Cost: indirection on the hot path + a versioned vtable. Boundary is clean because <code>src/nxt_tls.h</code> already abstracts the backend.</p>
+<h3>The three TLS consumers — one module or many?</h3>
+<table><thead><tr><th>Consumer</th><th>TLS side</th><th>Slim-Rust entry</th></tr></thead><tbody><tr><td>TCP control socket (D7)</td><td><strong>server</strong> (mTLS)</td><td>rustls module</td></tr><tr><td>ACME (Let's Encrypt, X9)</td><td><strong>client</strong> (HTTPS to the CA)</td><td>rustls + minimal HTTP ("in-daemon Rust shim" per <code>acme-tls-plan.md</code>)</td></tr><tr><td>Scheduler / crontab (X10)</td><td>none of its own — <strong>triggers</strong> <code>acme/renew</code></td><td>uses the ACME stack</td></tr></tbody></table>
+<p><code>scheduled-tasks-plan.md</code> already states the intent: <em>«If TLS becomes a module (tls.unit.so), a scheduler inside the daemon lets FreeUnit plan its own updates — cert renewal, module swaps, config re-apply — without external cron»</em>, with the diagram <code>tls.unit.so (OpenSSL today, rustls tomorrow) + scheduler</code>.</p>
+<h3>Open question for the team</h3>
+<p><strong>One shared <code>tls.unit.so</code> for control + ACME + otel/wasm, or scope it to control/ACME and keep otel/wasm deliberately slim/plaintext?</strong></p>
+<ul><li>Share → one stack, but otel/wasm lose their size/plaintext posture.</li><li>Scope → two postures (TLS present vs absent), more build permutations.</li></ul>
+<h2>8. Docker containers — what actually blocks them (2026-09-10)</h2>
+<p>Root tension: <strong>a unix socket = "manage from inside"; a container = "manage from outside".</strong></p>
+<table><thead><tr><th>Blocker</th><th>Detail (code + KB)</th></tr></thead><tbody><tr><td><strong>Default image runs as root</strong></td><td><code>CMD unitd</code> with no <code>USER</code> (<code>pkg/docker/Dockerfile.minimal:115</code>); uid 999 <code>unit</code> created but never <code>USER</code>ed → peer-cred gate short-circuits (<code>geteuid()==0</code>, <code>nxt_capability.c:52</code>)</td></tr><tr><td><strong><code>--user</code> fails on FS ownership, not capget</strong></td><td><code>--user 1000</code> → <code>mkdir(/var/lib/unit/certs) failed (13)</code> / <code>bind(control.unit.sock.tmp) failed (13)</code>. Needs tmpfs/chown; <code>capget</code> is <strong>allowed</strong> by moby's seccomp — not the blocker</td></tr><tr><td><strong>Reaching the socket from outside</strong></td><td>the real reason for TCP — upstream #1315: <em>«containerized application… impractical to accept API connections only from localhost»</em></td></tr><tr><td><strong>Bind-mounting the socket across the boundary</strong></td><td><code>SO_PEERCRED</code> returns the <strong>host</strong> uid of the client, not the container's <code>unitd</code> uid → the gate <strong>rejects a legitimate admin</strong></td></tr><tr><td><strong>userns-remap / rootless</strong></td><td>uid translation (host↔container) makes <code>cred.uid == nxt_euid</code> non-obvious</td></tr><tr><td><strong>Abstract sockets <code>unix:@name</code></strong></td><td>supported on Linux (<code>nxt_sockaddr.c:613</code>); <strong>no file → no FS perms → no chmod</strong>; scoped to the <strong>netns</strong>, so with a shared netns (<code>--network=host</code>, shared container netns) a neighbour container can reach it, and <strong>peer-cred is the only guard</strong> (moby#14767)</td></tr></tbody></table>
+<p><strong>Conclusion:</strong> containers hit the fork — <strong>unix (can't reach from outside) OR TCP (needs TLS → OpenSSL)</strong>. <strong>X11 (TLS module) breaks that deadlock</strong>: control-plane security stops imposing OpenSSL on the whole core.</p>
+<h2>9. Updated D7 recommendation (supersedes §5 tone)</h2>
+<ul><li><strong>Target design:</strong> TLS as module (X11) → TCP control with mTLS <strong>opt-in</strong>; unix peer-cred</li></ul>
+<p>stays the <strong>default, free</strong> path.</p>
+<ul><li><strong>Do NOT</strong> ship a bearer-token on TCP without TLS (goes in clear — upstream rejected it).</li><li><strong>Canonize</strong> "unix-only + front with NGINX/SSH" as the default (docs already say this);</li></ul>
+<p>secured TCP is an <strong>opt-in module</strong>.</p>
+<ul><li><strong>Bundle with X9 (ACME) + X10 (scheduler)</strong> — one TLS module serves control-API TLS <em>and</em></li></ul>
+<p>the ACME <strong>client</strong> side, which is the other missing 30% (<code>acme-tls-plan.md</code>).</p>
+<h2>10. Docs repo (<code>freeunitorg/docs</code>) — what it already says</h2>
+<p>The docs <strong>cover the unix-only posture but never mention auth-on-TCP</strong> (checked 2026-09-10):</p>
+<ul><li><strong><code>source/howto/security.rst</code> → «Secure Socket and State»</strong> (label <code>security-socket-state</code>):</li><li>«Your control socket and state directory provide <strong>unlimited access</strong> to Unit's</li></ul>
+<p>configuration, which calls for stringent protection.»</p>
+<ul><li>UNIX socket: «ensure it is available to <strong>root</strong> only» (<code>srw------- root root</code>).</li></ul>
+<p>«UNIX domain sockets aren't network accessible; for remote access, use NGINX or SSH.»</p>
+<ul><li>**IP-based control socket: «avoid public IPs; they expose the control API and all its</li></ul>
+<p>capabilities … manipulated by whoever is physically able to connect.»** Recommends the loopback address; then «any processes local to the same system can access the local socket, which calls for additional measures» → use NGINX to proxy.</p>
+<ul><li><strong>No bearer-token / mTLS / per-endpoint auth anywhere.</strong> The docs' answer to remote</li></ul>
+<p>access is "put NGINX (or SSH) in front" — i.e. externalize the auth, exactly the upstream stance (PR #1000).</p>
+<ul><li><strong><code>source/controlapi.rst</code></strong> — describes the socket type/address; defers security to</li></ul>
+<p><code>security-socket-state</code>. The OpenAPI section's «only IP sockets are supported now» is a limitation of the <em>OpenAPI tool image</em>, <strong>not</strong> an auth statement.</p>
+<ul><li><strong><code>source/news/2026/unit-1.36.0-released.rst</code></strong> — documents the peer-UID gate</li></ul>
+<p>(«require a matching peer UID (root or Unit's own effective UID) on the unix control socket … so control-user/-group/-mode are defense-in-depth») <strong>and</strong> a published advisory <strong>GHSA-768w-qrh2-jjvh — «control-socket peer-authentication bypass», CVSS 8.8</strong> (fixed in 1.36.0, backported to 1.34.x LTS).</p>
+<ul><li><code>source/security.rst</code> is a redirect stub (<code>:orphan:</code> → <code>../#reporting-issues</code>).</li></ul>
+<p><strong>Reading:</strong> the docs already tell operators "unix-only, root-only, else front it with NGINX/SSH". A D7 implementation would need to <strong>update this section</strong> (auth on the control socket) and reconcile with the 1.36.0 advisory (which was about bypassing the <em>existing</em> unix gate). Also note: the CVSS-8.8 bypass advisory means the unix gate had a real bypass that 1.36.0 fixed — a reminder that "gate at the socket layer" needs adversarial review.</p>
+<h2>11. Quorum result (2026-09-10)</h2>
+<p><code>zen_quorum</code> on the D7 design question, verdict options A/B/C/D/COMBO:</p>
+<table><thead><tr><th>Model</th><th>Verdict</th><th>Conclusion</th><th>Risk</th></tr></thead><tbody><tr><td>muse-spark-1.2</td><td><strong>COMBO</strong></td><td>NOT-CLEARED</td><td>high</td></tr><tr><td>ling-3.0-flash</td><td><strong>COMBO</strong></td><td>PARTIALLY-CLEARED</td><td>medium</td></tr><tr><td>nemotron-3-ultra</td><td><strong>COMBO</strong></td><td>NOT-CLEARED</td><td>high</td></tr><tr><td>muse-spark-1.3</td><td>(no verdict — runtime error)</td><td>—</td><td>—</td></tr><tr><td>mimo-v2.5 / deepseek-free</td><td>FAIL (429 / 400)</td><td>—</td><td>—</td></tr><tr><td>nemotron-3.5</td><td>format echo (invalid)</td><td>—</td><td>—</td></tr></tbody></table>
+<p><strong>Consensus 3/3 → COMBO</strong>: a <strong>layered</strong> approach —</p>
+<ol><li><strong>mTLS (client certs) required</strong> on the TCP control socket (Basic Auth alone was already</li></ol>
+<p>rejected upstream — lcrilly: insufficient without TLS);</p>
+<ol><li><strong>keep + harden</strong> the unix peer-cred gate (close the same-UID gap: token even on unix, or</li></ol>
+<p>a stricter check);</p>
+<ol><li><strong>per-endpoint granularity</strong> — leave <code>/status</code> open for monitoring, gate config/certs</li></ol>
+<p>(explicitly requested in upstream #1315).</p>
+<p>All three converged independently. Note the models saw only the description (no diff — this is a design question, so a blind-consensus vote is appropriate here; CONTEXT section is verifiable fact from code/docs). Conclusion split NOT-CLEARED/PARTIAL = "direction agreed, implementation not yet shown" — expected for a design decision.</p>
+<h2>Related</h2>
+<ul><li><code>engineering/audit-priority-matrix.md</code> — A1/R1 (weight 9.5), Phase-0 list.</li><li><code>engineering/acme-tls-plan.md</code> — X9; needs a TLS <strong>client</strong>; recommends an in-daemon Rust shim.</li><li><code>engineering/scheduled-tasks-plan.md</code> — X10; pairs with modular TLS.</li><li><code>engineering/rust-toolchain-policy.md</code> — the Rust build-time toolchain (otel/wasm/unitctl;</li></ul>
+<p>rustls precedent in <code>unitctl</code>).</p>
+<ul><li><code>v1/roadmap.md</code> — D7, X9, X10, and the new <strong>X11 (modular TLS)</strong> + feature-relationship map.</li><li>Fork code: <code>src/nxt_controller.c</code> <code>nxt_controller_check_peer_cred()</code> (:727),</li></ul>
+<p><code>nxt_controller_conn_init()</code> (:810); <code>src/nxt_runtime.c:998</code> (sockaddr parse); <code>src/nxt_tls.h</code> (backend abstraction); <code>auto/ssltls</code>, <code>auto/options:23</code>.</p>
+<ul><li>Upstream: nginx/unit #1315, #840, PR #1000, #225, #1319, #1318, #1266.</li></ul>
+<script src="/freeunit-kb/assets/kb.js"></script>
+</body></html>

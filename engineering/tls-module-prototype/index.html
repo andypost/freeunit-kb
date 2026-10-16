@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>engineering/tls-module-prototype</title>
+<link rel="stylesheet" href="/freeunit-kb/assets/kb.css">
+</head><body>
+<nav class="crumbs"><a href="/freeunit-kb/index.html">index</a> / engineering/tls-module-prototype</nav>
+
+<h1>engineering/tls-module-prototype</h1>
+
+<h1>TLS backend module — prototype results (2026-10-11)</h1>
+<p>Stream: TLS (module, h2, h3). Stage: W1 prototype, verified in CI.</p>
+<h2>What was built</h2>
+<p>Prototype branch <code>hermes/tls-module-proto</code> in <code>freeunitorg/freeunit-exp</code> (pull request 23). It is outside the server build; nothing is wired into <code>unitd</code>.</p>
+<ul><li><code>exp/tls-module/nxt_tls_backend.h</code> — the interface a loadable TLS module must</li></ul>
+<p>expose, the single exported symbol <code>nxt_tls_backend()</code>, and the interface version the loader checks.</p>
+<ul><li><code>exp/tls-module/tls_backend_openssl.c</code> — an OpenSSL backend: context create and</li></ul>
+<p>free, certificate and key, ALPN preference lists on both sides, the select callback, <code>conn_alpn_h2</code>.</p>
+<ul><li><code>exp/tls-module/smoke.c</code> — loads the module the way the core would, then drives</li></ul>
+<p>three ALPN cases over a real handshake.</p>
+<ul><li><code>.github/workflows/exp-tls-module.yml</code> — path-filtered job that builds and runs it.</li><li><code>docs/exp/tls-module-interface.md</code> — the interface note.</li></ul>
+<h2>Verified result (clean runner, OpenSSL 3.5.5, cc 15.2.0)</h2>
+<pre><code>PASS  interface                    backend=&quot;openssl&quot; version=1
+PASS  client offers no ALPN        negotiated &quot;&quot;
+PASS  client offers http/1.1       negotiated &quot;http/1.1&quot;
+PASS  client offers h2             negotiated &quot;h2&quot;
+OK (0 failures)</code></pre>
+<h2>The trap the run found — reuse this</h2>
+<p>The ALPN select callback must set <code><em>out</code> to the protocol <strong>name</strong>, not to the length-prefixed entry. Writing <code></em>out = p</code> (the entry) leaks the one-byte length prefix into the protocol name in the ServerHello; the client then answers with a <code>decode error</code> alert. Correct form:</p>
+<pre><code class="language-c">for (p = in, end = in + inlen; p &lt; end &amp;&amp; *p &gt; 0; p += 1 + *p) {
+    if ((size_t) *p == strlen(want) &amp;&amp; memcmp(p + 1, want, *p) == 0) {
+        *out = p + 1;      /* the NAME, not the length byte */
+        *outlen = *p;
+        return SSL_TLSEXT_ERR_OK;
+    }
+}
+return SSL_TLSEXT_ERR_NOACK;   /* no overlap: no ALPN, HTTP/1 follows */</code></pre>
+<p>Two more facts worth keeping:</p>
+<ul><li><strong>No overlap must answer NOACK, not an empty protocol.</strong> An empty answer breaks</li></ul>
+<p>a plain HTTP/1 client; NOACK sends no ALPN extension and HTTP/1 follows.</p>
+<ul><li><strong>Diagnosis method:</strong> run the no-ALPN case FIRST. If a plain handshake passes</li></ul>
+<p>while the ALPN cases fail, the fault is in the extension, not in the connection setup. The prototype's first failure message ("handshake did not complete") hid four different steps for two CI cycles; naming each step and dumping <code>ERR_get_error()</code> cut it to one.</p>
+<h2>Where this sits in the stream</h2>
+<ul><li>The HTTP/2 stack installs ALPN inside the TLS backend file (<code>src/nxt_openssl.c</code>,</li></ul>
+<p><code>nxt_openssl_alpn_select</code> / <code>SSL_CTX_set_alpn_select_cb</code> / <code>nxt_openssl_conn_alpn_h2</code>, +61 in pull request 463). No protocol file exists on <code>master</code>; the stack lives in pull requests.</p>
+<ul><li>Consequence: the module must own ALPN, or the core keeps its TLS dependency after</li></ul>
+<p>the module lands.</p>
+<h2>Still open</h2>
+<ul><li>TLS 1.3: what the callback returns when there is no overlap, and whether the</li></ul>
+<p>server still answers HTTP/1. The prototype pins TLS 1.2 on purpose.</p>
+<ul><li>Certificate reload ownership: core or module.</li><li>Health reporting to <code>/status</code> and the error log.</li><li>Load model: runtime <code>dlopen</code> with a built-in fallback, or a fixed module path</li></ul>
+<p>chosen at configure time.</p>
+<h2>Related</h2>
+<ul><li><code>engineering/tls-1.3-and-kubernetes.md</code> — the 1.38 TLS scope this prototype feeds</li><li><code>engineering/h3-research.md</code> — the <code>h3</code> ALPN token that couples this module to QUIC</li></ul>
+<script src="/freeunit-kb/assets/kb.js"></script>
+</body></html>

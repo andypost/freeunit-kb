@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>engineering/rust-toolchain-policy</title>
+<link rel="stylesheet" href="/freeunit-kb/assets/kb.css">
+</head><body>
+<nav class="crumbs"><a href="/freeunit-kb/index.html">index</a> / engineering/rust-toolchain-policy</nav>
+<p class="banner warn">POLICY — for the FreeUnit build</p>
+<h1>engineering/rust-toolchain-policy</h1>
+<table class="meta"><tr><th>created</th><td>2026-08-28</td></tr><tr><th>scope</th><td>Rust crates in the FreeUnit tree and their MSRV/release tracking</td></tr></table>
+<h1>FreeUnit Rust Toolchain Policy</h1>
+<p><strong>Created:</strong> 2026-08-28 <strong>Status:</strong> POLICY — for the FreeUnit build <strong>Scope:</strong> Rust crates in the FreeUnit tree and their MSRV/release tracking</p>
+<hr>
+<h2>Why Rust is in FreeUnit — and why it's NOT an eol.json runtime</h2>
+<p>FreeUnit is primarily C, but ships three Rust components built at configure time (<code>--otel</code>, <code>--wasm</code>):</p>
+<table><thead><tr><th>Crate</th><th>Path</th><th>Role</th></tr></thead><tbody><tr><td><code>src/otel</code></td><td>OTel SDK binding</td><td>spans, exporter (tokio, tonic, icu)</td></tr><tr><td><code>src/wasm-wasi-component</code></td><td>WASM runtime</td><td>component module</td></tr><tr><td><code>tools/unitctl</code></td><td>CLI tool</td><td>control-plane client</td></tr></tbody></table>
+<p><strong>Critical distinction:</strong> Rust is a <strong>build-time toolchain</strong>, not a runtime version FreeUnit <em>serves</em>. eol.json tracks runtime versions FreeUnit executes for user applications (PHP, Python, Go...). Rust does not belong there — its lifecycle model is fundamentally different (see below).</p>
+<hr>
+<h2>Rust release cycle — why there is no "EOL date"</h2>
+<p>Rust uses a <strong>release train</strong> (like Chrome/Firefox):</p>
+<table><thead><tr><th>Channel</th><th>When</th></tr></thead><tbody><tr><td>nightly</td><td>daily</td></tr><tr><td>beta</td><td>forks every 6 weeks</td></tr><tr><td><strong>stable</strong></td><td><strong>every 6 weeks, exactly</strong></td></tr></tbody></table>
+<p><strong>There is NO LTS release branch.</strong> Rust deliberately ships a new stable every 6 weeks and does NOT backport security fixes to older minors — a CVE is fixed by the <em>next</em> 6-week release, not by an LTS patch. Old stables keep working via rustup but are not supported for fixes.</p>
+<p>Therefore a "version dies on date X" mental model (PHP/Node eol.json entries) does not apply. The right model is <strong>MSRV</strong> (minimum supported Rust version).</p>
+<hr>
+<h2>Current state in FreeUnit</h2>
+<table><thead><tr><th>Item</th><th>Value</th></tr></thead><tbody><tr><td>Rust editions</td><td>2021 (all crates)</td></tr><tr><td><code>rust-version</code> (MSRV) in Cargo.toml</td><td><strong>absent</strong></td></tr><tr><td>Pinned toolchain</td><td><code>RUST_TOOLCHAIN: "1.88.0"</code> in build-deb.yml</td></tr><tr><td>Why 1.88</td><td><code>tonic 0.14 + icu 2.2</code> need rustc ≥ 1.88; Debian trixie apt rust is 1.85</td></tr><tr><td>Current stable</td><td><strong>1.98.0</strong> (2026-08-18)</td></tr><tr><td>Next major threshold</td><td><strong>1.100.0</strong> (~2026-11-10) — edition 2024, deny-lints</td></tr></tbody></table>
+<p><strong>Gap:</strong> no rust-toolchain file, no MSRV declaration, no CI leg proving the current stable (1.98) builds. Only the lower bound is exercised (1.88, in the deb build), and only implicitly.</p>
+<hr>
+<h2>Policy</h2>
+<h3>1. Declare MSRV in every Rust crate</h3>
+<pre><code class="language-toml"># src/otel/Cargo.toml, src/wasm-wasi-component/Cargo.toml, tools/unitctl/Cargo.toml
+rust-version = &quot;1.88&quot;   # floor: tonic/icu dependency requirement</code></pre>
+<p>This is the "lower EOL" — the oldest toolchain FreeUnit supports building with. Bump deliberately when a dependency raises its MSRV.</p>
+<h3>2. Test both edges in CI (bipolar)</h3>
+<pre><code>MSRV (1.88)     → proves the floor still builds
+current stable  (1.98.0) → proves the latest works</code></pre>
+<p>Add a small matrix leg next to the <code>openssl4</code> job in <code>.github/workflows/build-test.yml</code>, or bump the existing <code>RUST_TOOLCHAIN</code> in build-deb.yml and add a separate 1.88 leg.</p>
+<h3>3. Pre-empt the 1.100 threshold</h3>
+<p>The real breakage risk is not 1.98 (+10 minors, almost certainly fine) but <strong>1.100.0</strong> (~2026-11-10): the edition 2024 migration brings new deny-by- default lints and MSRV edges. Schedule a dedicated audit when it lands.</p>
+<h3>4. Do NOT add Rust to eol.json</h3>
+<p>eol.json semantics = "runtime version with a death date". Rust has none. If visual tracking is wanted, keep it as a comment/variable, not a runtime entry. The eol-check workflow assumes eol/supported_until dates, which Rust does not provide.</p>
+<hr>
+<h2>Decision matrix</h2>
+<table><thead><tr><th>Question</th><th>Answer</th></tr></thead><tbody><tr><td>Add Rust to eol.json?</td><td>❌ No — wrong lifecycle model</td></tr><tr><td>MSRV <code>rust-version</code>?</td><td>✅ Yes — <code>1.88</code> in each crate</td></tr><tr><td>Bump RUST_TOOLCHAIN to 1.98?</td><td>✅ Low risk (1.36.2)</td></tr><tr><td>Audit for 1.100?</td><td>✅ Required before 2026-11-10</td></tr><tr><td>In 1.36.1?</td><td>❌ Not now — post-tag, in 1.36.2</td></tr></tbody></table>
+<h2>Summary</h2>
+<ul><li>Rust is build-time, not a served runtime → not an eol.json concern.</li><li>No LTS → track MSRV, not a death date.</li><li>Floor today 1.88 (tonic/icu), current 1.98.0, watch 1.100 (edition 2024).</li><li>Concrete actions: <code>rust-version = "1.88"</code>, bipolar CI legs, 1.100 audit.</li></ul>
+<script src="/freeunit-kb/assets/kb.js"></script>
+</body></html>

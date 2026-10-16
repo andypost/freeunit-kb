@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>engineering/zen-quorum-capget-decision</title>
+<link rel="stylesheet" href="/freeunit-kb/assets/kb.css">
+</head><body>
+<nav class="crumbs"><a href="/freeunit-kb/index.html">index</a> / engineering/zen-quorum-capget-decision</nav>
+
+<h1>engineering/zen-quorum-capget-decision</h1>
+
+<h1>zen-quorum: FreeUnit capget-blokkature decision (2026-09-03)</h1>
+<p>_gathered keyless OpenCode Free tier · task = choose among real options on the capget chain_</p>
+<h2>Context (ground truth from <code>capget-fallback-plan.md</code>)</h2>
+<p>Fact: <code>unitd</code> exited when <code>capget()</code> was filtered by seccomp (EPERM/ENOSYS). PR #254 = warn+continue on ONLY those two errnos (narrow set), fail-closed on EINVAL/EFAULT (a real Unit bug, not an operator policy).</p>
+<h2>Options actually considered</h2>
+<table><thead><tr><th>id</th><th>option</th><th>stance</th></tr></thead><tbody><tr><td>A</td><td>PR #254 warn+continue on EPERM/ENOSYS (narrow)</td><td>in this PR</td></tr><tr><td>B</td><td>unconditional "unknown→none"</td><td>rejected (silent downgrade when setid==0)</td></tr><tr><td>C</td><td>drop caps in app-child after fork (<code>capset(0)</code>+<code>PR_CAP_AMBIENT_CLEAR_ALL</code>)</td><td>deferred to separate plan §4.5</td></tr><tr><td>D</td><td><code>capset(0)</code> on fallback in main</td><td>rejected (strips CAP_NET_BIND_SERVICE before bind → :80 dead)</td></tr></tbody></table>
+<h2>Opinions captured (3-model window)</h2>
+<table><thead><tr><th>model</th><th>latency</th><th>verdict</th><th>why</th></tr></thead><tbody><tr><td>laguna-s-2.1-free</td><td>4.4s</td><td>CORRECT</td><td>— (answer out of requested A/B/C/D schema — parse gap)</td></tr><tr><td>ling-3.0-flash-fin-free</td><td>26.0s</td><td>PARTIAL</td><td>"recommended approach (A, warn+continue) continues execution with potentially reduced capabilities, which could mask security issues."</td></tr><tr><td>nemotron-3.5-lightning-free</td><td>50.3s</td><td>(none)</td><td>thinking-preamble truncation; no verdict in window</td></tr></tbody></table>
+<h2>Divergence</h2>
+<p>Consensus 1/2 on majority (CORRECT/positive vs PARTIAL/neutral) — <strong>DIVERGENT</strong>, report as open question. Do not let one fast model (laguna) outvote the cautious one (ling). Note: the parse only captured the CORRECT/PARTIAL/WRONG schema, NOT the requested A/B/C/D — the runner cannot yet record a freeform verdict value.</p>
+<h2>Parse gap found (action item)</h2>
+<p><code>zen_quorum.py</code> pins verdict to <code>CORRECT|PARTIAL|WRONG</code>; a prompt that asks a multi-choice (A/B/C/D) is mis-parsed and the real choice is dropped. Fix: accept a freeform <code>VERDICT: &lt;value&gt;</code> (not an enum) so the runner can record A/B/C/D/COMBO. Only then will a decision-quorum be trustworthy.</p>
+<script src="/freeunit-kb/assets/kb.js"></script>
+</body></html>

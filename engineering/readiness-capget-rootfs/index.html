@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>engineering/readiness-capget-rootfs</title>
+<link rel="stylesheet" href="/freeunit-kb/assets/kb.css">
+</head><body>
+<nav class="crumbs"><a href="/freeunit-kb/index.html">index</a> / engineering/readiness-capget-rootfs</nav>
+
+<h1>engineering/readiness-capget-rootfs</h1>
+
+<h1>Readiness: capget + rootfs closure status (2026-09-06)</h1>
+<p>_Consolidated readiness for the two P0-adjacent security/isolation chains. Distills gh state (PRs/issues) into "what still stands between us and closed". Replaces scattered per-PR docs for the readiness question._</p>
+<h2>Capget (#254) — READY to merge, NOT merged</h2>
+<p><strong>Chain is one PR that grew into the full fix + follow-up:</strong> <code>freeunitorg/freeunit#254</code> "capability: keep running when capget() is filtered", <strong>open</strong>, +1024/−12, 9 files, 6 commits:</p>
+<ul><li><code>c04ff99</code> capget-fallback (warn+continue on EPERM/ENOSYS, narrow errno set)</li><li><code>88e1c8a</code> <strong>capset-drop follow-up</strong> — every forked child empties its</li></ul>
+<p>permitted/effective/inheritable/ambient sets in <code>nxt_process_apply_creds()</code> (after setgid/setuid, unshare, mount/pivot_root/chroot, before app code). Fixes the <strong>broader</strong> non-filter-dependent capability leak (unitd handed all 4 sets to every app even with a working capget). <code>PR_CAP_AMBIENT_CLEAR_ALL</code> first.</p>
+<ul><li><code>250d1ec</code> + <code>7ca2d99</code> tests: preload-shim records capset() callers; asserts</li></ul>
+<p>main never drops, prototype drops, worker does not (structural, not vacuous)</p>
+<ul><li><code>e38fdf8</code> CI fix (no leg was running the capget test)</li><li><code>fd8ddb</code> changes.xml (1.36.2 stanza)</li></ul>
+<p><strong>Claude thorough-review (01.09, @TuzelKO):</strong> <em>"The bug is closed, and the follow-up security fix is correctly placed."</em> 6 findings, <strong>none blocking</strong> — main two were changelog-omission + test-coverage gap (already present). Only non-production concern: duplicated warning-verbatim (low, a shared macro would make it structural).</p>
+<p><strong>Verdict:</strong> code-ready. Last activity 2026-09-01 (Claude). Not merged. → block = <strong>operator decision to merge</strong>, not code. Quorum decision was A (warn+continue) — see <code>zen-quorum-capget-decision.md</code>.</p>
+<h2>Rootfs — separate 3-piece chain, all open</h2>
+<table><thead><tr><th>#</th><th>role</th><th>state</th></tr></thead><tbody><tr><td><strong>#274</strong></td><td>bug cause: rootfs + namespaces.credential w/o namespaces.mount accepted but can never start (automounts hit parent mount-ns → EPERM, kernel invariant)</td><td>open</td></tr><tr><td><strong>#279</strong></td><td>fix: reject that config at apply time. Narrower than "rootfs+credential" — rootfs alone falls back to chroot (needs only CAP_SYS_CHROOT); the reject triggers only when an automount would be attempted. +256/−1 (nxt_conf_validation.c +116, test +140)</td><td>open</td></tr><tr><td><strong>#278</strong></td><td>build: probe memfd_create() WITHOUT the kernel UAPI header — fixes the musl/Alpine miss so libunit does NOT silently fall back to shm_open() (which breaks every isolation.rootfs app). +97/−5, 8 files (auto/shmem, nxt_port_memory.c, nxt_unit.c, test)</td><td>open, updated 09-06</td></tr></tbody></table>
+<p><strong>Chain is now fully covered by 3 PRs:</strong> #274 (describes the bug) is gated by #279 (config reject) for the mount-ns EPERM half, and by #278 (memfd probe) for the shm_open-rootfs-death half. All open, none merged. #278 opened 09-06 — the live fix for the Alpine build-blocker.</p>
+<p><strong>Rootfs readiness:</strong> #279 not reviewed yet (only opened 09-05). #273 is a build-level blocker that breaks rootfs apps on Alpine — it likely gates the rootfs story more than #279 does.</p>
+<h2>What the digest SHOWED vs reality</h2>
+<p>Digest (09-06) showed #276 merged + #292/#293 (EADDRINUSE/port-test, an offshoot of the #276 listener theme). It did <strong>not</strong> surface:</p>
+<ul><li>capget #254 (ready, unmerged — the actual pending P0)</li><li>capset-drop follow-up inside it</li><li>rootfs chain #279/#274/#273</li></ul>
+<p><strong>Lesson:</strong> the change-track digest tracks merge-activity, not "critical chain readiness". For readiness, query the KB graph / gh state (this file), not the daily digest.</p>
+<h2>Why so many PRs came out of capget/rootfs (snowball / class effect)</h2>
+<p>_2026-09-06 observation. 33 PRs in window 250-293; only 6 are directly capget/ rootfs. The rest are the connected-defect class the two P0s opened._</p>
+<p><strong>Capget is not one bug — it is a class on one contoured path</strong> (capset/capget/fork/cred + the same IPC port/process path):</p>
+<ul><li>#254 capability fallback (the fix itself)</li><li>#255 clear proto_port_requests (process-start path)</li><li>#253 port auth by kernel pid (adjacent same port/process path)</li></ul>
+<p><strong>Rootfs is not one bug — 4 axes, 4 PRs</strong> (mount ns + automount + memfd + cred):</p>
+<ul><li>#259 test-side (timezone db)</li><li>#265 product fix (automount.language_deps)</li><li>#278 build fix (memfd_create probe, musl/Alpine)</li><li>#279 config reject (rootfs+credential w/o mount ns)</li></ul>
+<p><strong>Why it snowballs (root cause, not a bug):</strong></p>
+<ul><li>capget &amp; rootfs are SYSTEMIC problems (cap visibility, mount-namespace, build</li></ul>
+<p>detection). Fixing a systemic defect opens N adjacent defects on the same contour, not one isolated case.</p>
+<ul><li>The 09-05 wave (#277-291) is NOT all capget/rootfs — it is clearing adjacent</li></ul>
+<p>defects found en route (router listener, http compression, access-log, state files, START_PROCESS reply, app-start bound). Same PORT/PROCESS/ROUTER/HTTP zone, but distinct defects.</p>
+<ul><li>Small verifiable PRs (one per change) is the CORRECT practice — not one</li></ul>
+<p>giant PR. 33 small PRs ≠ noise; #284 (access-log), #287 (port lock), #281 (engine-quit job) each carry a real fix.</p>
+<p><strong>Classification (250-293):</strong> capget/rootfs direct = 6 · CI/test/build = 9 · adjacent (port/process/router/http) = 18.</p>
+<h2>Related</h2>
+<ul><li><code>engineering/zen-review-pr-254.md</code> — merge review of #254</li><li><code>engineering/zen-quorum-capget-decision.md</code> — quorum chose variant A</li><li><code>engineering/capget-fallback-plan.md</code> — A/B/C/D options</li><li><code>engineering/zen-review-pr-276.md</code> — router listener (the digest's focus)</li></ul>
+<script src="/freeunit-kb/assets/kb.js"></script>
+</body></html>

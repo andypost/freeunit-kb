@@ -1,0 +1,303 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>engineering/fix-recv-tier-kernel-6</title>
+<link rel="stylesheet" href="/freeunit-kb/assets/kb.css">
+</head><body>
+<nav class="crumbs"><a href="/freeunit-kb/index.html">index</a> / engineering/fix-recv-tier-kernel-6</nav>
+
+<h1>engineering/fix-recv-tier-kernel-6</h1>
+<table class="meta"><tr><th>problem</th><td>Three C-structural constraints forced the RECV tier's deferral</td></tr></table>
+<h1>Fixing io_uring RECV Tier on Kernel 6.0+</h1>
+<p><strong>Problem:</strong> Three C-structural constraints forced the RECV tier's deferral in PR #31. Kernel 6.0+ has all the features needed — this is a C architecture issue, not a kernel issue.</p>
+<hr>
+<h2>The Three Constraints (from PR #31 <code>design.md</code>)</h2>
+<h3>C1: Scope — data conns vs UDS port sockets</h3>
+<blockquote><p>"recv must cover data conns only, never UDS port sockets (SCM_RIGHTS/cred cmsgs). But both arm read through the same <code>enable_read</code> and <code>nxt_fd_event_t</code> has no type tag to separate them — and §1.7 forbids adding one."</p></blockquote>
+<h3>C2: Buffer lifetime — ring buffer across app round-trip</h3>
+<blockquote><p>"The zero-copy win needs a ring buffer handed to the pipeline as <code>c-&gt;read</code>, but the router can pin <code>c-&gt;read</code> across the app round-trip and starve the ring; the safe answer is copy-out at the parse boundary, and a naive copy-out-everywhere model adds a userspace copy that makes it net-negative. A lifecycle slip is a soak signal-11."</p></blockquote>
+<h3>C3: Read discipline — block_read vs multishot recv</h3>
+<blockquote><p>"Unit <code>block_read()</code>s after each read while multishot recv delivers continuously, so a blocked conn accumulates ring buffers until ENOBUFS and the degrade-to-poll+recv path must be robust."</p></blockquote>
+<hr>
+<h2>Kernel 6.x Features Available</h2>
+<table><thead><tr><th>Kernel</th><th>Feature</th><th>Solves</th></tr></thead><tbody><tr><td>6.0</td><td><code>IORING_RECV_MULTISHOT</code> + provided buffer rings</td><td>C2, C3</td></tr><tr><td>6.0</td><td><code>IORING_OP_SEND_ZC</code> (zero-copy send)</td><td>C2 (send side)</td></tr><tr><td>6.0</td><td><code>IORING_SETUP_SINGLE_ISSUER</code> + <code>DEFER_TASKRUN</code></td><td>Performance (not a constraint)</td></tr><tr><td>6.0+</td><td><code>IORING_REGISTERED_BUFFERS</code> (<code>IO_URING_REG_USE_REGISTERED_*</code>)</td><td>C2 — pin pages, no buffer starvation</td></tr><tr><td>6.1+</td><td><code>IORING_OP_READ_FIXED</code> stability</td><td>C2 — read into registered buffers</td></tr><tr><td>6.4+</td><td><code>IORING_SETUP_COOP_TASKRUN</code> improvements</td><td>Performance</td></tr><tr><td>6.7+</td><td><code>send_zc</code> with <code>IORING_NOTIF_USAGE</code></td><td>C2 — notification for buffer reuse</td></tr></tbody></table>
+<hr>
+<h2>Fix Strategy per Constraint</h2>
+<h3>C1 Fix: Socket Type Tag — the §1.7 exception</h3>
+<p>§1.7 forbids adding fields to <code>nxt_fd_event_t</code> because it's a hot cache path. But we can use the <strong>existing</strong> <code>nxt_fd_event_t</code> fields already allocated:</p>
+<pre><code class="language-c">// nxt_fd_event_t — current structure
+typedef struct nxt_fd_event_s {
+    // ... existing fields ...
+    uint8_t           read;         // state (INACTIVE/DISABLED/BLOCKED/...)
+    uint8_t           write;        // state
+    uint8_t           epoll_eof;    // exists now (set-only from CQE handler)
+    uint8_t           epoll_error;  // exists now
+    
+    // Proposal: reuse one of the spare alignment bytes for type tag
+    // None exist currently, so add:
+    uint8_t           conn_type:2;  // 0=tcp, 1=uds, 2=listen, 3=internal
+    // 6 spare bits remain; still fits in the alignment budget
+} nxt_fd_event_t;</code></pre>
+<p><strong>But §1.7 isn't the end of the story.</strong> The real question: does the <code>nxt_event_interface_t</code> contract pass enough context to the engine's <code>enable_read</code> to distinguish conn types?</p>
+<p>Currently <code>enable_read(engine, ev)</code> receives <code>nxt_fd_event_t *ev</code>, which has NO access to the parent <code>nxt_conn_t</code> or its type. The fix:</p>
+<p><strong>Option A (minimal):</strong> Extract conn type from the fd itself:</p>
+<pre><code class="language-c">void nxt_io_uring_enable_read(nxt_event_engine_t *engine, nxt_fd_event_t *ev) {
+    // At accept time, we know the fd type. For UDS sockets:
+    struct sockaddr_un addr;
+    socklen_t len = sizeof(addr);
+    if (getsockname(ev-&gt;fd, (struct sockaddr *)&amp;addr, &amp;len) == 0
+        &amp;&amp; addr.sun_family == AF_UNIX)
+    {
+        // → UDS: use poll-mode (no buf_ring recv)
+        arm_poll_read(engine, ev);
+    } else {
+        // → TCP: use completion-mode recv (buf_ring)
+        arm_buf_ring_recv(engine, ev);
+    }
+}</code></pre>
+<p><strong>Cost:</strong> one <code>getsockname(2)</code> syscall on the first <code>enable_read</code>. After that, cache the result in a <code>conn_type</code> bit.</p>
+<p><strong>Option B (clean):</strong> Add the <code>conn_type</code> field to <code>nxt_fd_event_t</code> (violating §1.7 but pragmatically simpler). The <code>nxt_event_interface_t</code> design explicitly allows engine-specific extensions:</p>
+<pre><code class="language-c">// nxt_io_uring_engine.c — io_uring extends nxt_fd_event_t
+#define NXT_IO_URING_CONN_TCP    0
+#define NXT_IO_URING_CONN_UDS    1
+#define NXT_IO_URING_CONN_LISTEN 2
+
+// in enable_read:
+if (ev-&gt;nxt_io_uring_conn_type == NXT_IO_URING_CONN_UDS) {
+    // → poll-mode (SCM_RIGHTS need raw recvmsg)
+} else {
+    // → completion-mode (buf_ring recv)
+}</code></pre>
+<h3>C2 Fix: Two Buffer-Lifecycle Strategies</h3>
+<h4>Strategy A: Copy-at-Parse (safe, net-positive for large bodies)</h4>
+<p>The PR's concern was correct: <strong>copying every small request</strong> makes it net-negative. But we can use a <strong>size heuristic</strong>:</p>
+<pre><code class="language-c">// nxt_io_uring_recv_steal — called at the request-parse boundary
+void nxt_io_uring_recv_steal(nxt_io_uring_conn_t *conn, nxt_buf_t *dst) {
+    if (conn-&gt;recv_buf_size &gt; IO_URING_STEAL_THRESHOLD) {
+        // Check threshold: ~4KB
+        // → Zero-copy: hand the ring buffer pointer to the pipeline
+        dst-&gt;mem.pos = conn-&gt;ring_buf;
+        dst-&gt;mem.free = conn-&gt;ring_buf + conn-&gt;recv_buf_size;
+        dst-&gt;mem.start = conn-&gt;ring_buf;
+        dst-&gt;mem.end = conn-&gt;ring_buf + IO_URING_BUF_SIZE;
+        // Mark buffer &quot;owned by the pipeline&quot; — the ring slot cannot
+        // be reused until this buf is freed.
+        conn-&gt;buf_in_flight = true;
+        // On buf free: call io_uring_buf_ring_add() to return it
+    } else {
+        // → Copy-out for small bodies (&lt;4KB)
+        memcpy(dst-&gt;mem.pos, conn-&gt;ring_buf, conn-&gt;recv_buf_size);
+        io_uring_buf_ring_add(br, conn-&gt;ring_buf, IO_URING_BUF_SIZE,
+                              conn-&gt;buf_index, IO_URING_BUF_FLAG);
+        // Buffer immediately returned to ring
+    }
+}</code></pre>
+<p><strong>Threshold logic:</strong></p>
+<pre><code class="language-c">#define IO_URING_STEAL_THRESHOLD 4096
+// Bodies ≤4KB: copy-out, return buffer to ring immediately
+// Bodies &gt;4KB: steal the buffer, pipeline owns it, return on free
+
+// Rationale:
+// - HTTP headers (~1-2KB): copied, no buffer starvation
+// - PHP uploads (5MB+): stolen, zero-copy win
+// - JSON API (500B-10KB): mixed, threshold catches the 10KB ones
+// - Use profile: Drupal/WP uploads are 100KB-50MB → mostly steal</code></pre>
+<h4>Strategy B: Registered Buffers (IO_URING_REGISTERED_BUFFERS)</h4>
+<p>Kernel 6.0+ allows registering a set of buffers at ring creation time. The kernel <strong>pins the pages</strong> — buffers never leave system memory. When c-&gt;read is pinned across the app round-trip:</p>
+<pre><code class="language-c">// Setup (once per ring):
+io_uring_register_buffers_sparse(ring, 128, &amp;buf_config);
+// Creates 128 registered buffer slots — kernel pins pages
+
+// Per-recv: kernes can write into registered buffer
+sqe = io_uring_get_sqe(ring);
+io_uring_prep_recv_multishot(sqe, fd, 0, BUFSEL_FIXED);
+sqe-&gt;buf_group = 0;  // uses registered buffer group
+sqe-&gt;flags |= IOSQE_BUFFER_SELECT | IORING_RECV_MULTISHOT;
+
+// Per-completion:
+// CQE carries buf_index — which registered buffer was used
+// c-&gt;read = pointer to the registered buffer (always in memory)
+// Pipeline reads directly from it
+// When pipeline is done — mark buffer as available for reuse</code></pre>
+<p><strong>Key advantage over buf_ring:</strong> registered buffers are <strong>never ENOBUFS</strong>. The kernel guarantees them as long as the ring is alive. The problem in the PR's analysis (closing stale fd) becomes <strong>zero risk</strong> because the registered buffer lives with the ring, not the fd.</p>
+<h4>Strategy C: Dynamic Two-Pool (recommended hybrid)</h4>
+<pre><code class="language-c">// Two buffer pools per connection:
+// 1. Small slab (64 bytes × N) — for headers
+// 2. Large buffer (64KB × M) — for body
+
+// Headers always go through the small slab (copy-out, instant return)
+// Body goes through the large pool (stolen if &gt;4KB, copied if ≤4KB)
+
+struct nxt_io_uring_buf_pool {
+    struct io_uring_buf_ring *small;  // 64B × 1024 headers
+    struct io_uring_buf_ring *large;  // 64KB × 64 body slots
+};
+
+void nxt_io_uring_recv_to_pipeline(nxt_conn_t *c, nxt_buf_t *dst) {
+    if (c-&gt;state == NXT_CONN_PARSE_HEADERS) {
+        // Headers: always copy (small, frequent → buffer ring starvation is unacceptable)
+        copy_from_small_slab(c, dst);
+        return_small_slab_buffer(c);
+    } else {
+        // Body: steal if size &gt; threshold
+        if (c-&gt;body_remaining &gt; IO_URING_STEAL_THRESHOLD) {
+            steal_large_buffer(c, dst);
+        } else {
+            copy_from_large_slab_small_body(c, dst);
+        }
+    }
+}</code></pre>
+<h3>C3 Fix: block_read × multishot recv</h3>
+<p>The problem: <code>block_read()</code> is a pure state write. In epoll mode, the registration stays armed and nothing happens. In io_uring multishot mode, the kernel keeps delivering — buffers fill up → ENOBUFS.</p>
+<p><strong>Fix: Two-phase recv connection I/O</strong></p>
+<pre><code class="language-c">static nxt_conn_io_t nxt_io_uring_multishot_conn_io = {
+    .recv = nxt_io_uring_recv_multishot,     // arm multishot + buf_ring
+    .send = nxt_conn_send,                   // unchanged
+    .close = nxt_io_uring_close,
+};
+
+static nxt_conn_io_t nxt_io_uring_oneshot_conn_io = {
+    .recv = nxt_io_uring_recv_oneshot,       // re-arm per read
+    .send = nxt_conn_send,
+    .close = nxt_io_uring_close,
+};</code></pre>
+<p>The engine switches between them based on connection state:</p>
+<pre><code class="language-c">// In enable_read:
+void nxt_io_uring_enable_read(nxt_event_engine_t *engine, nxt_fd_event_t *ev) {
+    if (ev-&gt;state == NXT_EVENT_BLOCKED &amp;&amp; ev-&gt;io == &amp;nxt_io_uring_multishot_conn_io) {
+        // WAS multishot, now BLOCKED → switch to oneshot
+        // Cancel pending multishot recv
+        io_uring_prep_cancel64(sqe, ud, 0);
+        // Mark for re-arm as oneshot on next unblock
+        ev-&gt;io = &amp;nxt_io_uring_oneshot_conn_io;
+        return;
+    }
+    if (ev-&gt;state == NXT_EVENT_DEFAULT &amp;&amp; ev-&gt;io == &amp;nxt_io_uring_oneshot_conn_io) {
+        // Unblocked → can use multishot again
+        ev-&gt;io = &amp;nxt_io_uring_multishot_conn_io;
+    }
+}
+
+// In recv_multishot handler — when !F_MORE:
+static void nxt_io_uring_recv_multishot_cqe(nxt_io_uring_conn_t *conn,
+                                            struct io_uring_cqe *cqe) {
+    if (!(cqe-&gt;flags &amp; IORING_CQE_F_MORE)) {
+        // Multishot terminated (ENOBUFS, kernel pressure)
+        // → fall back to oneshot immediately
+        conn-&gt;ev.io = &amp;nxt_io_uring_oneshot_conn_io;
+        // The fallback is transparent: next recv() uses oneshot
+    }
+
+    if (cqe-&gt;res == -ENOBUFS) {
+        // Buffer ring exhausted — drain what we have, re-arm with small buffer
+        io_uring_prep_recv(oneshot_sqe, conn-&gt;fd, small_buf, sizeof(small_buf), 0);
+    }
+}</code></pre>
+<p><strong>The actual fix is NO multishot for blocking workers:</strong></p>
+<pre><code class="language-c">// Key insight: Unit routers are BLOCKING. One request at a time per worker.
+// Multishot only helps event-loop workers (Python async, Node, Ruby Fiber).
+// For blocking workers: use ONESHOT recv (re-arm per recv).
+
+// Oneshot recv has zero ENOBUFS risk:
+// → recv() returns data → handler processes → re-arms recv
+// → block_read() means DON&#x27;T re-arm → no kernel state to cancel
+// → enables after block → re-arms → simple!
+
+// This makes all three constraints disappear:
+// C1: Scope — oneshot recv for TCP, raw recvmsg for UDS → trivial
+// C2: Lifetime — oneshot buf is consumed in handler → no cross-roundtrip pinning
+// C3: Discipline — block_read = don&#x27;t re-arm → no ENOBUFS
+
+// Multishot only for event-loop workers (Python/Ruby async):
+// → They CAN handle ENOBUFS (event-loop drains in time)
+// → They WANT multishot (reduces syscalls)
+// → They can use buf_ring (properly)</code></pre>
+<hr>
+<h2>Architectural Options for FreeUnit C-core</h2>
+<h3>Option 1: Minimal — oneshot recv only (no multishot for v1)</h3>
+<pre><code class="language-c">// nxt_io_uring_engine.c — add oneshot recv
+static nxt_conn_io_t nxt_io_uring_oneshot_conn_io = {
+    .recv = nxt_io_uring_recv_oneshot,
+    .send = nxt_conn_send,  // unchanged
+    .close = nxt_io_uring_close,
+};
+
+// arm_recv_oneshot(conn, fd, buf, len) → SQE: IORING_OP_RECV
+// CQE: handler reads `cqe-&gt;res` bytes, processes, re-arms
+// block_read: set state, DON&#x27;T re-arm
+// enable_read: re-arm recv
+// close: NO cancel needed (oneshot already consumed)
+
+// One recv = one SQE = one CQE = one handler run
+// Simple. Testable. No ENOBUFS.</code></pre>
+<p><strong>Pros:</strong> Zero new constraints. Works on kernel 5.19+. No buf_ring needed. <strong>Cons:</strong> Every recv = one syscall. No zero-copy. Same as plain recv(2).</p>
+<h3>Option 2: Hybrid — one-hot recv for blocking, multishot for event-loop</h3>
+<pre><code class="language-c">// On accept: determine if this worker is blocking or event-loop
+// Blocking → oneshot recv
+// Event-loop → multishot recv + buf_ring
+if (worker_type == WORKER_BLOCKING) {
+    conn-&gt;recv_mode = ONESHOT;
+} else {
+    conn-&gt;recv_mode = MULTISHOT;
+}</code></pre>
+<p><strong>Pros:</strong> Zero-overhead for blocking workers, zero-copy for event-loop. <strong>Cons:</strong> Two code paths, more testing.</p>
+<h3>Option 3: Full — oneshot + multishot + dynamic fallback (recommended)</h3>
+<pre><code class="language-c">// Start every conn in MULTISHOT (buf_ring + IORING_RECV_MULTISHOT)
+// On ENOBUFS or BLOCK → fall back to ONESHOT (transparent)
+// On unblock → try MULTISHOT again
+//
+// This handles ALL patterns optimally:
+// - Long-lived keepalive: multishot (zero syscalls after first recv)
+// - Blocked upstream: fall to oneshot (no buffer accumulation)
+// - Large upload: buf_ring steal (zero-copy)
+// - Small request: buf_ring copy-fast (header optimization)</code></pre>
+<hr>
+<h2>Kernel 6.x Features That Change the Trade-offs</h2>
+<h3>6.0: Buffer rings + IORING_RECV_MULTISHOT</h3>
+<p>The buf_ring API:</p>
+<pre><code class="language-c">// Setup (once per ring):
+struct io_uring_buf_ring *br = io_uring_setup_buf_ring(ring, 1024, 0, 0, &amp;ret);
+// io_uring_buf_ring_add() to populate
+// Kernel writes into ring buffers directly
+// CQE returns (buf_off, buf_index) — you read from `br-&gt;bufs[buf_index].addr + buf_off`</code></pre>
+<p><strong>Changes C2 analysis:</strong> Before 6.0: buf_ring didn't exist → zero-copy meant custom page-pinning. After 6.0: <code>io_uring_setup_buf_ring()</code> gives you ring buffers in 3 syscalls.</p>
+<h3>6.0: IORING_OP_SEND_ZC</h3>
+<pre><code class="language-c">io_uring_prep_send_zc(sqe, fd, buf, len, flags, 0);
+// Kernel maps userspace pages, sends directly from them
+// No copy from userspace to kernel.
+// Notification via IORING_OP_NOTIFY — sent when kernel is done with pages.</code></pre>
+<p>For Drupal/WP: static file serving via send_zc = zero-copy from page cache to socket. Combined with <code>splice()</code> for sendfile equivalent.</p>
+<h3>6.4+: SINGLE_ISSUER + DEFER_TASKRUN</h3>
+<p>Not usable in Unit: create is not a poll thread.</p>
+<hr>
+<h2>Implementation Plan for FreeUnit</h2>
+<h3>Phase 1: oneshot recv (kernel 5.19+, ~1 week)</h3>
+<pre><code class="language-c">// 1. Add nxt_io_uring_conn_io with oneshot recv
+// 2. arm_recv_sqe(fd, buf, len, user_data)
+// 3. handler: read bytes → process → (re-arm OR stop)
+// 4. block_read = set state, DON&#x27;T re-arm
+// 5. enable_read = re-arm if state changed from BLOCKED
+// 6. close = no-op (oneshot already consumed)
+
+// Files to modify:
+// src/nxt_io_uring_engine.c    — add recv_oneshot handler + arming
+// src/nxt_fd_event.h           — (maybe) add conn_type field
+// docs/io_uring/design.md      — update tiers, add RECV section</code></pre>
+<p><strong>Verification:</strong></p>
+<ul><li><code>NXT_IO_URING_FORCE_TIER=recv</code> enables oneshot recv</li><li><code>NXT_IO_URING_FORCE_TIER=accept</code> keeps Stage-2 ACCEPT path</li><li>Benchmark: RPS, p50/p99, CPU µs/req vs epoll</li></ul>
+<h3>Phase 2: buf_ring recv (kernel 6.0+, ~2 weeks)</h3>
+<pre><code class="language-c">// 1. Setup buf_ring at ring creation
+// 2. IORING_RECV_MULTISHOT with buffer select
+// 3. CQE handler: extract buf_index, steal or copy per threshold
+// 4. Buffer lifecycle: return to ring on nxt_buf_t free
+// 5. ENOBUFS fallback to oneshot recv</code></pre>
+<h3>Phase 3: send_zc (kernel 6.0+, ~1 week)</h3>
+<pre><code class="language-c">// 1. IORING_OP_SEND_ZC for response body
+// 2. Notification tracking via fence-style completion
+// 3. Static file sendfile → send_zc on the same fd</code></pre>
+<hr>
+<h2>Summary: What Changes on Kernel 6.x</h2>
+<table><thead><tr><th>Constraint</th><th>Before 6.0</th><th>After 6.0</th><th>Fix</th></tr></thead><tbody><tr><td>C1 (Scope)</td><td>No way to distinguish</td><td>Still no way</td><td>Add conn_type bit</td></tr><tr><td>C2 (Buffer life)</td><td>buf_ring doesn't exist; c-&gt;read pinning = signal-11 risk</td><td><code>io_uring_setup_buf_ring()</code> + registered buffers</td><td>Heuristic: steal &gt;4KB, copy ≤4KB; or use registered buffers</td></tr><tr><td>C3 (Read discipline)</td><td>block_read leaves multishot armed → ENOBUFS</td><td>Same</td><td>Oneshot recv for blocking workers; multishot only for event-loop</td></tr></tbody></table>
+<p><strong>Bottom line:</strong> Kernel 6.x doesn't automatically fix the three constraints. It gives us the BUILDING BLOCKS (buf_ring, send_zc, registered buffers) but the ARCHITECTURAL DECISIONS (how to handle c-&gt;read lifetime, how to distinguish conn types, how to manage block_read) remain C-code design choices. The RECV tier can be implemented NOW on kernel 6.x — it was deferred because of C design, not kernel availability.</p>
+<script src="/freeunit-kb/assets/kb.js"></script>
+</body></html>

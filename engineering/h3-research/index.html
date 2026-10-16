@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>engineering/h3-research</title>
+<link rel="stylesheet" href="/freeunit-kb/assets/kb.css">
+</head><body>
+<nav class="crumbs"><a href="/freeunit-kb/index.html">index</a> / engineering/h3-research</nav>
+
+<h1>engineering/h3-research</h1>
+
+<h1>HTTP/3 — research result (W3, 2026-10-11)</h1>
+<p>Stream: TLS (module, h2, h3). Stage: research + one measured spike. No core code, no date.</p>
+<p>Branch <code>hermes/h3-research</code> in <code>freeunitorg/freeunit-exp</code>, pull request 24. Artifacts: <code>exp/h3-spike/h3_spike.py</code>, <code>docs/exp/h3-verdict.md</code>, <code>.github/workflows/exp-h3-spike.yml</code>.</p>
+<h2>Measured</h2>
+<p>Userspace stack (aioquic 1.4.0, Python), one QUIC server + one HTTP/3 client on loopback, one <code>GET /</code>:</p>
+<table><thead><tr><th>Where</th><th>QUIC handshake</th><th>H3 request round trip</th><th>Result</th></tr></thead><tbody><tr><td>this host</td><td>32.8 ms</td><td>2.7 ms</td><td>200, body <code>hello over h3</code></td></tr><tr><td>clean CI runner</td><td>35.4 ms</td><td>0.8 ms</td><td>200, body <code>hello over h3</code></td></tr></tbody></table>
+<p>What it proves: QUIC and HTTP/3 work in ordinary Linux userspace with one UDP socket, one certificate, and no kernel feature. Each H3 stream is a normal request. What it does not prove: any performance number for a C implementation. Python numbers price the shape, not the cost.</p>
+<h2>The three options</h2>
+<ul><li><strong>In-house QUIC in C</strong> — own congestion control, loss recovery, connection IDs,</li></ul>
+<p>packet timers. A second transport state machine beside the event engine. Highest effort and the largest bug surface; nginx carried its own QUIC and shipped HTTP/3 experimental for years.</p>
+<ul><li><strong>A library</strong> — ngtcp2 + nghttp3 (C) fits the existing event model; quiche/Quinn</li></ul>
+<p>arrive through FFI with a second runtime's timers. Either way the dependency is a permanent build, test and packaging commitment, and reverting it is a breaking packaging change.</p>
+<ul><li><strong>Keep it at the edge</strong> — nginx, HAProxy or a CDN terminates HTTP/3; the core</li></ul>
+<p>stays HTTP/1 + HTTP/2. This is what the abandoned front-proxy plan relied on. It remains a legitimate operator deployment, not a missing feature.</p>
+<h2>Prerequisites, in order</h2>
+<ol><li>TLS 1.3 in the TLS module — QUIC requires it, and the ALPN token <code>h3</code> must be a</li></ol>
+<p>first-class value there. <strong>This is the only hard coupling between W1 and W3.</strong></p>
+<ol><li>HTTP/2 shipped — it validates the protocol-extension path, ALPN routing and the</li></ol>
+<p>connection-object split.</p>
+<ol><li>Body streaming (D3) — a QUIC connection multiplexes many streams, so a buffered</li></ol>
+<p>body parks behind flow control on every other stream. The KB named D3 a prerequisite for h2 and downgraded it to follow-on there; for HTTP/3 it stays a prerequisite.</p>
+<ol><li>A UDP event path — connection IDs, stateless resets and packet timers are new</li></ol>
+<p>shapes for a TCP-oriented engine.</p>
+<h2>Recommendation (hypothesis, maintainer's call)</h2>
+<ul><li>Do not start before HTTP/2 ships and D3 lands.</li><li>Prefer a library over an in-house stack: the protocol is not the differentiator.</li><li>Decide explicitly whether HTTP/3 is a core feature or an edge concern. That</li></ul>
+<p>decision, not the estimate, sets the sequence.</p>
+<ul><li>The KB estimate of 4–6 months after D3 assumes the library path and stays a</li></ul>
+<p>hypothesis.</p>
+<h2>Do not claim</h2>
+<ul><li>No number from this spike as a product number.</li><li>No HTTP/3 mention in release notes, the site or a talk while this file is the only</li></ul>
+<p>artifact.</p>
+<ul><li>No date.</li></ul>
+<h2>Prior art checked</h2>
+<p><code>nginx/unit</code> issue 554 (QUIC and HTTP/3) is open since 2021 with no implementation — an unbuilt item, not a rejected one. <code>nginx</code> itself ships its own QUIC.</p>
+<h2>Related</h2>
+<ul><li><code>engineering/tls-module-prototype.md</code> — W1, verified module prototype</li></ul>
+<script src="/freeunit-kb/assets/kb.js"></script>
+</body></html>

@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>engineering/zen-review-pr-282</title>
+<link rel="stylesheet" href="/freeunit-kb/assets/kb.css">
+</head><body>
+<nav class="crumbs"><a href="/freeunit-kb/index.html">index</a> / engineering/zen-review-pr-282</nav>
+
+<h1>engineering/zen-review-pr-282</h1>
+
+<h1>zen-review PR #282 — http: release the application's buffers after compressing</h1>
+<p>_2026-09-08. Review of freeunitorg/freeunit#282. MERGED 2026-09-08 14:37 UTC._ _<code>fix/http-compression-multi-buffer</code> → master, +256/−43, 3 files. Fixes #177._</p>
+<h2>What is wrong (fatal, not merely wasteful)</h2>
+<p><code>nxt_http_comp_compress_app_response()</code> (<code>src/nxt_http_compression.c:170</code>) released the app buffer it just compressed via <code>nxt_buf_free()</code> — <code>nxt_mp_free()</code>, a plain pool free that NEVER runs <code>b-&gt;completion_handler</code> (<code>nxt_buf.h:239</code>). For port-mmap buffers that handler is <code>nxt_port_mmap_buf_completion()</code> (<code>nxt_port_memory.c:159</code>), the only thing that marks chunks free in <code>hdr-&gt;free_map</code>, drops the mmap_handler reference and releases the <code>nxt_mp_retain()</code> on <code>port-&gt;mem_pool</code>. So <strong>every compressed response leaked its shared memory</strong>. With <code>shm_limit</code> (100 MB default), a worker exhausts buffers and stops answering — measured: 11 requests (~99 MB) and a <code>TimeoutError</code> on the 11th.</p>
+<h2>The fix</h2>
+<ol><li><strong>Walk the chain, not just the head</strong> — <code>nxt_port_mmap_read()</code> makes one</li></ol>
+<p><code>nxt_buf_t</code> per <code>nxt_port_mmap_msg_t</code>, linked into <code>r-&gt;out</code>, sync buffer at tail. The old version compressed the head and replaced the chain with one output, so anything behind the head was dropped and <code>ctx-&gt;clen_sent</code> counted only the head (which decides when the compressor is told it is finishing the stream).</p>
+<ol><li><strong>Free via the completion handler</strong> — `nxt_work_queue_add(&amp;engine-&gt;fast_work_queue,</li></ol>
+<p>in-&gt;completion_handler, task, in, in-&gt;parent)<code> instead of </code>nxt_buf_free()<code>. Canonical idiom for port-mmap (same as </code>nxt_chunk_parse.c:336<code>, </code>nxt_websocket.c:105<code>, </code>nxt_port_socket.c:706<code>). </code>in-&gt;next` cleared because the handler walks the chain.</p>
+<ol><li><strong>Non-mmap buffers passed through</strong> (trailing sync/last with no data; plain-mode</li></ol>
+<p>not compressed).</p>
+<ol><li><strong><code>in_len == 0 &amp;&amp; !last</code> → release</strong> instead of consuming zero bytes.</li><li><strong>Fail path re-attaches</strong> the unconsumed input and the kept output so the caller's</li></ol>
+<p>error path owns the whole chain.</p>
+<ol><li><strong><code>NXT_HTTP_COMP_FLUSH_SLACK</code> (64)</strong> headroom for the per-call flush marker that</li></ol>
+<p><code>bound()</code> does not promise.</p>
+<h2>Verdict: APPROVE (merged)</h2>
+<ul><li>✅ Balanced chain handoff; mmap buffers released via completion (fast_work_queue),</li></ul>
+<p>consistent with <code>chunk_parse</code>.</p>
+<ul><li>✅ <code>clen_sent</code> now counts the full input length (the <code>last</code> flag is correct).</li><li>✅ Fail path does not lose memory — chain fully re-assembled.</li><li>✅ Symmetry on <code>cbytes == -1</code>: output freed, input re-attached.</li></ul>
+<h2>Tests (strong)</h2>
+<p><code>test_php_compression_large_random_body</code> (parametrized gzip/br/zstd; 9 MB incompressible; sha256 round-trip byte-for-byte; exactly one of Content-Length / chunked framing) and <code>test_php_compression_shm_not_leaked</code> (15 requests &gt;100 MB, regression for #177). <code>raw_get</code> on a bare socket expresses "fail rather than blok forever". Note in test: "Declining to compress is equally valid as long as the encoding is not advertised".</p>
+<h2>Notes</h2>
+<ul><li>Refs #177. Sibling reviews: zen-review-pr-281 (engine-quit tmcf UAF), pr-288</li></ul>
+<p>(proto-death start RPC).</p>
+<script src="/freeunit-kb/assets/kb.js"></script>
+</body></html>

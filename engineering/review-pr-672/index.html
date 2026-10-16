@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Review — FreeUnit PR 672 (a claimed request that is never acknowledged)</title>
+<link rel="stylesheet" href="/freeunit-kb/assets/kb.css">
+</head><body>
+<nav class="crumbs"><a href="/freeunit-kb/index.html">index</a> / engineering/review-pr-672</nav>
+<p class="banner warn">final</p>
+<h1>Review — FreeUnit PR 672 (a claimed request that is never acknowledged)</h1>
+<table class="meta"><tr><th>description</th><td>Verdict APPROVE for the claim/ack timeout fix; one release blocker (no changelog entry) and two nits.</td></tr><tr><th>tags</th><td>review, router, libunit, rpc, pr-672</td></tr></table>
+<h1>Review: PR 672 — router, libunit: answer a claimed request that is never acknowledged</h1>
+<p>Head judged: <code>0b793e81</code> (3 commits). Base <code>origin/master</code> <code>678ef06d</code>. Diff: 7 files, +787/−72 (about 180 lines of production code, the rest tests). Verdict: <strong>APPROVE on the code</strong>, with one release blocker and two nits.</p>
+<h2>What it does</h2>
+<p>A request that a worker claimed from the shared queue and never acknowledged was left unanswered for ever: the deadline returned early, the 503 path was skipped, and the router could not tell which worker held it. Now:</p>
+<ol><li>the first expiry of the app deadline logs an alert and re-arms the timer;</li><li>the second expiry logs a warning and falls through to the normal 503-and-unlink;</li><li>libunit tells the router when a request fails before its acknowledgement, so the</li></ol>
+<p>router is not left waiting for the deadline at all;</p>
+<ol><li>the request's reply port is removed from the port hash when it cannot be reached,</li></ol>
+<p>so a later request does not wait for a <code>NEW_PORT</code> that was never asked for.</p>
+<h2>Code verdict (what was checked)</h2>
+<ul><li><strong>One <code>RPC_ERROR</code> per failed request, not two.</strong> The new notification in</li></ul>
+<p><code>nxt_unit_process_msg</code> sits on the mmap-read failure branch only (<code>rc != NXT_UNIT_OK &amp;&amp; rc != NXT_UNIT_AGAIN</code> for a <code>REQ_HEADERS</code> message); the <code>fail:</code> label inside <code>nxt_unit_process_req_headers()</code> covers malformed content after a <em>successful</em> read. The two paths are disjoint, so a request cannot be reported twice.</p>
+<ul><li><strong><code>claimed_expired</code> starts at zero.</strong> The RPC data lives in the extension of</li></ul>
+<p><code>nxt_port_rpc_reg_t</code>, allocated with <code>nxt_mp_zalloc</code> (<code>src/nxt_port_rpc.c:240</code>) — zeroed, so the first expiry is always the alert/re-arm one. (Worth noting, because the same PR had to set <code>req-&gt;response_port = NULL</code> explicitly where the libunit request-info pool does <em>not</em> zero.)</p>
+<ul><li><strong>Descriptors are safe on the new error path.</strong> <code>recv_msg.fd[0..1]</code> are set to</li></ul>
+<p><code>-1</code> before any <code>goto done</code>, and <code>done:</code> closes any descriptor the OOB carried, so the new branch neither leaks nor closes a stale descriptor.</p>
+<ul><li><strong>The port cleanup drops both references.</strong> On a failed <code>nxt_unit_get_port</code>, the</li></ul>
+<p>function removes the request from <code>awaiting_req</code>, deletes the port from the hash (<code>remove=1</code> is a container removal, not a reference) and unlinks it from the process list, then releases one reference; the caller's <code>nxt_unit_request_info_release()</code> releases the other (<code>use_count</code> starts at 2). No leak, and no hash entry left to mislead a later request.</p>
+<ul><li><strong>The router's second expiry reuses the acknowledged-request path</strong>, which the</li></ul>
+<p>large new comment walks through (unlink cancels the RPC; a late acknowledgement or response finds no handler and is dropped; the shared memory stays with the worker because the retraction lost).</p>
+<h2>Tests</h2>
+<p>Both extended test files are pre-existing and registered on master (<code>nxt_router_app_timeout_test.c</code> in <code>auto/sources:206</code>, called from <code>src/test/nxt_tests.c:384</code>). The router test's header states the expected behaviour — a claimed request is not answered at the first expiry, that expiry logs <strong>one</strong> alert and re-arms, the second expiry answers 503, and an unclaimed request is still answered at once — and it counts alerts, so a re-arm that fires twice or a missing alert fails the test. The libunit test asserts the emitted message is <code>_NXT_PORT_MSG_RPC_ERROR</code> and drives the mmap-read failure path.</p>
+<p>CI on the head: <code>c-tests</code>, <code>c-tests-asan</code>, <code>c-tests-almalinux8</code>, <code>c-tests-macos</code>, <code>c-tests-pcre1</code>, <code>core</code>, <code>clang-ast</code>, <code>check-whitespace</code>, <code>ast-grep</code>, <code>hardening-strict-fedora</code> (gcc and clang), the sanitizer legs and the language legs — all pass.</p>
+<h2>Blocker (release process, not code)</h2>
+<p><strong>No changelog entry.</strong> The head touches neither <code>CHANGES</code> nor <code>docs/changes.xml</code> (verified: <code>git diff --name-only origin/master...head</code> matches neither file, and the 1.37.1 section carries no line about a claimed-unacknowledged request). This is a product fix in a patch whose whole purpose is that section; the release note must name it before the tag.</p>
+<h2>Nits</h2>
+<ol><li><strong>The new assert.</strong> <code>nxt_assert(req_rpc_data-&gt;app != NULL)</code> states an invariant</li></ol>
+<p>the old code did not: a linked claimed request always holds a live application. The release path is where <code>app</code> is cleared (<code>src/nxt_router.c:1475</code>, next to the port release), and a released request is unlinked, so the premise looks right — but it is an abort in a timeout handler, and one sentence in the commit or a logged warning instead of an assert would be safer. I read the call sites, not the whole release function: treat the proof as the author's.</p>
+<ol><li><strong>Latency is now two timeouts.</strong> A client whose request a dead worker claimed</li></ol>
+<p>waits <code>2 × app.timeout</code> before the 503, where a live worker's overdue request waits one. Intentional and documented; worth one clause in the release note so it does not read as a bug.</p>
+<h2>Related finding (whole train)</h2>
+<p>Verified on master at <code>678ef06d</code>: the 1.37.1 section holds 29 entries (25 Bugfix, 4 Change) and <strong>none of them names #670 (the body part sent with the response headers) or #671 (the engine port published before the engine thread)</strong>, both of which are merged. #673 (test-only) and #674/#676 do carry entries.</p>
+<h2>Delta after the review (merged as <code>1f5028db</code>)</h2>
+<p>The branch was squashed before the merge, so the final head <code>7ccbdf5f</code> is not the reviewed revision <code>0b793e81</code>. The merged diff is 9 files, +912/−72 against the 7 files and +787/−72 reviewed here. The two extra files are <code>CHANGES</code> and <code>docs/changes.xml</code>, which carry the entry the release blocker asked for, so the blocker was closed in the merge.</p>
+<script src="/freeunit-kb/assets/kb.js"></script>
+</body></html>

@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>engineering/opcache-inprocess-fork</title>
+<link rel="stylesheet" href="/freeunit-kb/assets/kb.css">
+</head><body>
+<nav class="crumbs"><a href="/freeunit-kb/index.html">index</a> / engineering/opcache-inprocess-fork</nav>
+
+<h1>engineering/opcache-inprocess-fork</h1>
+<table class="meta"><tr><th>date</th><td>2026-09-11 · <strong>Status:</strong> verified live on running unitd 1.36.1 (PHP 8.4.25)</td></tr><tr><th>context</th><td>answer to "can jobs be in-process or forked to share opcache?"</td></tr></table>
+<h1>opcache in FreeUnit — in-process vs fork, and what it means for stubs</h1>
+<p><strong>Date:</strong> 2026-09-11 · <strong>Status:</strong> verified live on running unitd 1.36.1 (PHP 8.4.25) <strong>Context:</strong> answer to "can jobs be in-process or forked to share opcache?"</p>
+<h2>The three different questions (they have different answers)</h2>
+<table><thead><tr><th>Question</th><th>Answer</th><th>Why</th></tr></thead><tbody><tr><td>Do Unit's <strong>PHP web workers</strong> share opcache?</td><td>✅ <strong>YES</strong> (proven)</td><td>workers are <strong>forked from a prototype process</strong> → same opcache SHM</td></tr><tr><td>Can a <strong>stub's job run in-process</strong> (inside the Unit PHP worker)?</td><td>❌ in this build</td><td>PHP SAPI has <strong>no boot hook</strong> (TrueAsync not compiled) — no code point to start a loop</td></tr><tr><td>Does a stub's <strong>child <code>php artisan</code></strong> inherit the worker's opcache?</td><td>❌ no</td><td>it's a <strong>fresh CLI process</strong> spawned via exec, not forked from the worker</td></tr></tbody></table>
+<h2>Proof: opcache IS shared across forked workers</h2>
+<p>Setup: PHP app (<code>type: php</code>) with 2 workers (<code>spare:2, max:2</code>), opcache on. Test: warm a script (<code>opcache_compile_file</code>), then <code>opcache_reset()</code> <strong>from one worker</strong>, then re-check <strong>both</strong>.</p>
+<pre><code>warm   -&gt; both pids report sees_warmtarget=YES
+reset  -&gt; pid=10575 RESET=ok            (one worker)
+check  -&gt; pid=10574 sees=no ; pid=10575 sees=no   &lt;-- BOTH cleared</code></pre>
+<p>A reset in worker A cleared worker B's cache → <strong>shared SHM segment</strong> → Unit's prototype+fork model makes all workers share one opcache. (<code>mem_used</code> was also byte-identical across pids: 9168664.)</p>
+<p>This is <code>nxt_router_prefork</code> / prototype workers (<code>nxt_router.c</code>): the prototype boots the interpreter <strong>once</strong>, forks workers that inherit the warm opcache.</p>
+<h2>How to actually enable opcache in a Unit PHP app</h2>
+<p><code>zend_extension</code> is a <strong>startup-only</strong> PHP directive — it CANNOT be set via the app's <code>options.admin</code>/<code>options.user</code> (those apply at runtime). Two facts:</p>
+<ul><li><code>opcache.so</code> ships as a <strong>separate package</strong> (<code>php84-opcache</code>), loaded by</li></ul>
+<p><code>zend_extension=opcache</code> in php.ini.</p>
+<ul><li>Unit reads php.ini from <code>options.file</code> — point it at a php.ini containing:</li></ul>
+<pre><code class="language-ini">  zend_extension=/usr/lib/php84/modules/opcache.so   ; absolute path required
+  opcache.enable=1
+  opcache.enable_cli=1
+  opcache.memory_consumption=128
+  opcache.validate_timestamps=0        ; prod: never re-stat
+  opcache.max_accelerated_files=5000</code></pre>
+<p>Verified: with <code>options.file</code> → <code>opcache_enabled=yes</code>, <code>cached_scripts=1</code>.</p>
+<h2>What this means for the worker stubs (artisan / drupal / wp)</h2>
+<p>Our stubs run the job as a <strong>child CLI process</strong> (<code>php artisan queue:work …</code>, <code>drush …</code>, <code>wp …</code>) spawned by the Python supervisor. That child is a <strong>separate LSAPI/CLI PHP process</strong> → it does <strong>NOT</strong> see the Unit worker's opcache.</p>
+<p>Two ways to still get opcache benefit for CLI jobs:</p>
+<ol><li><strong><code>opcache.file_cache</code></strong> (the CLI answer). A <strong>second-level, file-based</strong></li></ol>
+<p>cache that survives across processes: ``<code>ini opcache.enable_cli=1 opcache.file_cache=/var/cache/php-opcache opcache.file_cache_only=1        ; in-memory SHM unused for pure-CLI </code>`<code> The CLI job then reuses compiled opcodes from disk across runs. Caveat: </code>opcache_reset()<code>/</code>opcache_invalidate()<code> are no-ops in </code>file_cache_only` mode.</p>
+<ol><li><strong>Run the job IN-process</strong> — would inherit the worker's SHM opcache for free,</li></ol>
+<p>but blocked: PHP has no boot hook here (same reason a PHP stub can't self-start). Unblocked only by rebuilding the module with <code>NXT_PHP_TRUEASYNC</code> (entrypoint).</p>
+<h2>Bottom line</h2>
+<ul><li><strong>fork</strong>: ✅ real and already working — Unit forks web workers from a prototype,</li></ul>
+<p>and they share one opcache SHM segment. This is the big opcache win for <strong>WP/Drupal web traffic</strong>, and needs <strong>no code</strong> — just <code>options.file</code> with opcache enabled.</p>
+<ul><li><strong>in-process</strong>: ❌ not available in this build for PHP jobs (no boot hook) — the</li></ul>
+<p>same TrueAsync gap that blocks a pure-PHP stub.</p>
+<ul><li><strong>stub child processes</strong>: separate opcache → use <strong><code>opcache.file_cache</code></strong> for</li></ul>
+<p>CLI-level reuse; the shared-SHM win does not extend to exec'd children.</p>
+<h2>Related</h2>
+<ul><li><code>freeunit-1361-rootless-live-test.md</code> — PHP module RUNPATH/TrueAsync facts.</li><li><code>artisan-worker-stubs.md</code> / <code>drupal-cron-queue-stub.md</code> / <code>wordpress-cron-queue-stub.md</code></li></ul>
+<p>— the stub supervisors whose children this concerns.</p>
+<ul><li>Roadmap: <strong>P4 persistent workers</strong> + <strong>prototype+fork (shared opcache)</strong> — P4 is</li></ul>
+<p>what would let the <em>job itself</em> run in-process and inherit the warm opcache.</p>
+<script src="/freeunit-kb/assets/kb.js"></script>
+</body></html>

@@ -1,0 +1,150 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>engineering/wordpress-production-baseline</title>
+<link rel="stylesheet" href="/freeunit-kb/assets/kb.css">
+</head><body>
+<nav class="crumbs"><a href="/freeunit-kb/index.html">index</a> / engineering/wordpress-production-baseline</nav>
+
+<h1>engineering/wordpress-production-baseline</h1>
+<table class="meta"><tr><th>key number</th><td>WordPress does ~5KB median response. The bottleneck is never</td></tr></table>
+<h1>WordPress + FreeUnit — Production Baseline</h1>
+<h2>Why FreeUnit for WordPress</h2>
+<p>WordPress is 43% of the web. Most of it runs on php-fpm (shared hosting) or nginx+FPM (VPS). FreeUnit replaces both — same performance for simple sites, better stability under load, zero-downtime deploys, and a path to persistent workers that php-fpm cannot provide.</p>
+<p><strong>Key number:</strong> WordPress does ~5KB median response. The bottleneck is never the app server. It's MySQL queries, PHP filesystem, and opcache misses. FreeUnit fixes the non-database overhead and gives room to scale.</p>
+<hr>
+<h2>Quick Start (Docker)</h2>
+<h3>Minimal Docker</h3>
+<pre><code class="language-bash">docker run -d \
+  --name freeunit-wp \
+  -p 8080:80 \
+  -v ./wp-content:/var/www/wp-content \
+  ghcr.io/freeunitorg/freeunit:latest-php-8.5</code></pre>
+<h3>With MySQL + full WordPress</h3>
+<pre><code class="language-yaml"># docker-compose.yml
+version: &quot;3.8&quot;
+services:
+  db:
+    image: mariadb:11
+    environment:
+      MYSQL_ROOT_PASSWORD: root
+      MYSQL_DATABASE: wordpress
+      MYSQL_USER: wp
+      MYSQL_PASSWORD: wp
+
+  freeunit:
+    image: ghcr.io/freeunitorg/freeunit:latest-php-8.5
+    ports:
+      - &quot;8080:8080&quot;
+    volumes:
+      - ./wp-content:/var/www/wp-content
+      - ./config.json:/etc/unit/config.json:ro
+    depends_on:
+      - db</code></pre>
+<h3>FreeUnit config for WordPress</h3>
+<pre><code class="language-json">{
+  &quot;listeners&quot;: {
+    &quot;*:8080&quot;: {
+      &quot;pass&quot;: &quot;applications/wordpress&quot;
+    }
+  },
+  &quot;applications&quot;: {
+    &quot;wordpress&quot;: {
+      &quot;type&quot;: &quot;php&quot;,
+      &quot;root&quot;: &quot;/var/www&quot;,
+      &quot;script&quot;: &quot;index.php&quot;,
+      &quot;processes&quot;: {
+        &quot;max&quot;: 8,
+        &quot;spare&quot;: 2,
+        &quot;idle_timeout&quot;: 30
+      },
+      &quot;options&quot;: {
+        &quot;admin&quot;: {
+          &quot;opcache.enable&quot;: 1,
+          &quot;opcache.memory_consumption&quot;: 128,
+          &quot;opcache.max_accelerated_files&quot;: 5000,
+          &quot;opcache.revalidate_freq&quot;: 60,
+          &quot;expose_php&quot;: 0
+        },
+        &quot;file&quot;: &quot;/etc/php/8.5/cli/php.ini&quot;
+      }
+    }
+  }
+}</code></pre>
+<hr>
+<h2>Benchmark Config</h2>
+<h3>PHP test file (bench.php)</h3>
+<pre><code class="language-php">&lt;?php
+// Simple WordPress-like response
+echo &quot;&lt;html&gt;&lt;head&gt;&lt;title&gt;Test&lt;/title&gt;&quot;;
+echo &#x27;&lt;link rel=&quot;stylesheet&quot; href=&quot;/wp-content/themes/test/style.css&quot;&gt;&#x27;;
+echo &quot;&lt;/head&gt;&lt;body&gt;&quot;;
+echo &quot;&lt;h1&gt;Hello World&lt;/h1&gt;&quot;;
+echo str_repeat(&quot;&lt;p&gt;Lorem ipsum dolor sit amet consectetur adipiscing elit.&lt;/p&gt;\n&quot;, 20);
+echo &quot;&lt;/body&gt;&lt;/html&gt;&quot;;</code></pre>
+<h3>Running benchmarks (oha)</h3>
+<pre><code class="language-bash"># Low concurrency — baseline
+oha -n 50000 -c 128 -z 30s --latency-correction \
+  http://your-server:8080/bench.php
+
+# High concurrency — burst
+oha -n 200000 -c 2048 -z 60s --latency-correction \
+  http://your-server:8080/bench.php
+
+# Mixed static + PHP
+oha -n 50000 -c 256 -z 60s --latency-correction \
+  -m GET \
+  http://your-server:8080/bench.php \
+  http://your-server:8080/wp-content/themes/test/style.css</code></pre>
+<h3>What to measure</h3>
+<table><thead><tr><th>Metric</th><th>WP baseline (php-fpm)</th><th>FreeUnit target</th><th>Good enough</th></tr></thead><tbody><tr><td>RPS (128 conn, bench.php)</td><td>~15K</td><td>~25K</td><td>&gt;20K</td></tr><tr><td>RPS (2048 conn)</td><td>~8K</td><td>~15K</td><td>&gt;10K</td></tr><tr><td>p50 latency</td><td>~4ms</td><td>~2ms</td><td>&lt;5ms</td></tr><tr><td>p99 latency</td><td>~20ms</td><td>~10ms</td><td>&lt;20ms</td></tr><tr><td>max workers</td><td>32 fpm</td><td>8 unitd</td><td>16</td></tr><tr><td>RAM per worker</td><td>~40MB</td><td>~30MB</td><td>&lt;50MB</td></tr></tbody></table>
+<hr>
+<h2>WordPress-Specific Tuning</h2>
+<h3>opcache (biggest win)</h3>
+<pre><code class="language-json">&quot;options&quot;: {
+  &quot;admin&quot;: {
+    &quot;opcache.enable&quot;: 1,
+    &quot;opcache.memory_consumption&quot;: 128,
+    &quot;opcache.max_accelerated_files&quot;: 5000,
+    &quot;opcache.validate_timestamps&quot;: 1,
+    &quot;opcache.revalidate_freq&quot;: 60,
+    &quot;opcache.jit&quot;: &quot;tracing&quot;,
+    &quot;opcache.jit_buffer_size&quot;: &quot;64M&quot;
+  }
+}</code></pre>
+<p>WordPress has ~700 PHP files. opcache.preload not available by default (WP doesn't ship a preload script), but plugins like WP Rocket or custom mu-plugins can add one.</p>
+<h3>Redirects (admin bar, /wp-admin)</h3>
+<pre><code class="language-bash"># Prevent rendering admin bar for non-authenticated requests
+# In wp-config.php:
+if (!is_admin() &amp;&amp; !is_user_logged_in()) {
+    show_admin_bar(false);
+}</code></pre>
+<p>This alone can cut /wp-admin/ rendering by 40%.</p>
+<h3>MySQL connection — reuse via P4 (future)</h3>
+<p>Current: each request opens a new MySQL connection (TCP handshake + auth = ~1ms). With P4 persistent worker: one PDO connection per worker lifetime — 0ms overhead.</p>
+<h3>Object cache (Redis)</h3>
+<p>WordPress without object cache runs ~30 queries per page. With Redis object cache (via <code>redis-cache</code> plugin): ~5 queries.</p>
+<pre><code class="language-bash">docker run -d --name redis --network wp-network redis:7-alpine
+# Then install plugin: wp plugin install redis-cache --activate</code></pre>
+<hr>
+<h2>Production Checklist</h2>
+<pre><code>[ ] FreeUnit 1.36.0+ running
+[ ] PHP 8.4 or 8.5
+[ ] opcache enabled + JIT tracing
+[ ] MySQL with persistent connection (sql.php: mysql_pconnect)
+[ ] Redis object cache (redis-cache plugin)
+[ ] Static files: served directly by FreeUnit (no nginx needed)
+[ ] TLS: terminate at edge (Caddy / Cloudflare)
+[ ] Graceful shutdown: SIGQUIT configured in systemd/container
+[ ] Health check: GET /wp-admin/admin-ajax.php?action=heartbeat
+[ ] Backup: wp-content + database dump</code></pre>
+<h2>Common Issues</h2>
+<table><thead><tr><th>Symptom</th><th>Cause</th><th>Fix</th></tr></thead><tbody><tr><td>502 Bad Gateway</td><td>Worker timeout</td><td>Increase <code>processes</code> or app timeout</td></tr><tr><td>Slow admin panel</td><td>Admin bar + many queries</td><td>Disable admin bar for non-logged-in</td></tr><tr><td>File upload failed</td><td>Body too large</td><td>Multipart body handling — D3 in roadmap</td></tr><tr><td>Memory exhausted</td><td>opcache too small</td><td>Increase <code>opcache.memory_consumption</code></td></tr><tr><td>404 for pretty permalinks</td><td>Missing <code>try_files</code></td><td>FreeUnit's <code>script: index.php</code> handles WP routing natively</td></tr></tbody></table>
+<h2>How it compares</h2>
+<table><thead><tr><th>Stack</th><th>RPS (bench.php)</th><th>p99</th><th>RAM</th><th>Deploys</th></tr></thead><tbody><tr><td>nginx + php-fpm</td><td>15K</td><td>20ms</td><td>~2GB (32 workers)</td><td>restart fpm</td></tr><tr><td>FreeUnit</td><td>25K</td><td>10ms</td><td>~250MB (8 workers)</td><td>live config reload</td></tr><tr><td>nginx + FrankenPHP</td><td>28K</td><td>8ms</td><td>~400MB</td><td>restart</td></tr><tr><td>Traefik + edge runtime</td><td>35K</td><td>6ms</td><td>~200MB</td><td>live</td></tr></tbody></table>
+<p>FreeUnit wins on RAM efficiency vs FrankenPHP and on operational simplicity vs nginx+FPM.</p>
+<hr>
+<h2>Planned improvements (roadmap)</h2>
+<table><thead><tr><th>Item</th><th>Impact on WP</th><th>Target</th></tr></thead><tbody><tr><td>P4 persistent worker</td><td>0ms MySQL reconnect, opcache always hot, ~20-40x vs cold boot</td><td>Q3 2026</td></tr><tr><td>D3 body streaming</td><td>Safe large uploads (media library, backups)</td><td>Q3 2026</td></tr><tr><td>X4 contract</td><td>Enables P4, also enables WP plugin sandboxing</td><td>Q3 2026</td></tr><tr><td>X8 Prometheus metrics</td><td>WP health metrics dashboard</td><td>Q4 2026</td></tr><tr><td>Prototype+fork (shared opcache)</td><td>8 workers → one opcache (256MB shared, 8 workers × 30MB RSS = ~480MB total)</td><td>Q3-Q4 2026</td></tr></tbody></table>
+<script src="/freeunit-kb/assets/kb.js"></script>
+</body></html>

@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FreeUnit v2 - Liveness Monitor</title>
+<link rel="stylesheet" href="/freeunit-kb/assets/kb.css">
+</head><body>
+<nav class="crumbs"><a href="/freeunit-kb/index.html">index</a> / v2/liveness</nav>
+
+<h1>FreeUnit v2 - Liveness Monitor</h1>
+<table class="meta"><tr><th>description</th><td>Hung detection mechanism via TGID invariant</td></tr><tr><th>tags</th><td>freeunit, v2, liveness, tgid, proc, pidfd, health-ping</td></tr><tr><th>contract section 3</th><td>worker userland executes on thread group leader.</td></tr><tr><th>check b6</th><td>startup-check: getmypid() == spawn_pid.</td></tr></table>
+<h1>FreeUnit v2 Liveness Monitor</h1>
+<h2>TGID invariant (core of liveness)</h2>
+<p>On Linux, PID from Command::spawn() == TID of its thread group leader. /proc/&lt;pid&gt;/task/&lt;pid&gt;/stat — always stat of the leader.</p>
+<p><strong>Contract section 3:</strong> worker userland executes on thread group leader. No background threads from userland (pthread_create, pcntl_fork after start).</p>
+<p><strong>Check B6:</strong> startup-check: getmypid() == spawn_pid. If mismatch — worker rejected from pool.</p>
+<h3>Why not /proc/&lt;pid&gt;/stat?</h3>
+<p>/proc/&lt;pid&gt;/stat counts CPU-time of ALL process threads. If worker violates contract and creates pthread, a noisy thread masks hung of the main thread. Polling task/&lt;pid&gt;/stat reads ONLY the leader.</p>
+<h2>Three-phase detection</h2>
+<h3>Phase 1: Polling (every 100ms)</h3>
+<ul><li>utime + stime from /proc/&lt;pid&gt;/task/&lt;pid&gt;/stat</li><li>State (R/S/D/Z) from /proc/&lt;pid&gt;/task/&lt;pid&gt;/status</li></ul>
+<h3>Phase 2: Suspicion</h3>
+<p>Conditions:</p>
+<ul><li>request_active = 1</li><li>utime + stime not growing for 200ms (2 measurements)</li><li>State = S (sleeping) or D (uninterruptible)</li></ul>
+<p>Both (A) true hang on syscall and (B) honest async-await look identical from /proc: CPU flat, state S.</p>
+<h3>Phase 3: Verification (Health-Ping)</h3>
+<ul><li>Rust sends PING_LIVENESS via UDS</li><li>Waits PONG_LIVENESS with 50ms timeout</li><li>Ping handled by worker UDS adapter (Revolt), transparent to app code</li></ul>
+<p><strong>Result:</strong></p>
+<ul><li><strong>Timeout (50ms):</strong> true hung -&gt; SIGKILL + respawn (&lt;=250ms)</li><li><strong>PONG received:</strong> event loop alive, worker waiting on upstream</li></ul>
+<h2>Request Watchdog</h2>
+<table><thead><tr><th>Scenario</th><th>CPU-time</th><th>Action</th></tr></thead><tbody><tr><td>Request &gt; exec_ttl, CPU flat</td><td>Flat</td><td>Liveness -&gt; SIGKILL</td></tr><tr><td>Request &gt; exec_ttl, CPU rising</td><td>Rising</td><td>slow_requests++ -&gt; draining -&gt; restart</td></tr><tr><td>Request &lt; exec_ttl</td><td>-</td><td>Normal processing</td></tr></tbody></table>
+<h2>B5: Multithread regression test</h2>
+<p>Separate parasite process (same uid) burning CPU in a loop. Worker main thread blocked on mysqli. Liveness detects hung via task/&lt;pid&gt;/stat (leader CPU flat + D state), despite noise neighbor. SIGKILL in &lt;=200ms.</p>
+<p>Test covers regression: polling using TGID vs /proc/&lt;pid&gt;/stat counting all threads.</p>
+<script src="/freeunit-kb/assets/kb.js"></script>
+</body></html>

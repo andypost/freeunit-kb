@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>history</title>
+<link rel="stylesheet" href="/freeunit-kb/assets/kb.css">
+</head><body>
+<nav class="crumbs"><a href="/freeunit-kb/index.html">index</a> / history</nav>
+
+<h1>history</h1>
+
+<h1>FreeUnit Project History</h1>
+<h2>Original NGINX Unit (2017-2025)</h2>
+<table><thead><tr><th>Date</th><th>Event</th></tr></thead><tbody><tr><td>Jan 2017</td><td>Initial commit by Igor Sysoev (NGINX Inc.)</td></tr><tr><td>2017–2019</td><td>Active development: 7 languages, isolation, live config</td></tr><tr><td>Mar 2019</td><td>F5 acquires NGINX for $670M</td></tr><tr><td>2019–2022</td><td>Slower development. HTTP/2, QUIC, Service Mesh planned — never shipped</td></tr><tr><td>2022</td><td>Founders leave F5. Moscow office closes. Angie fork created (NGINX, not Unit)</td></tr><tr><td>Apr 2025</td><td>F5 announces Unit moves to "critical maintenance only"</td></tr><tr><td>Oct 2025</td><td>NGINX Unit repo archived</td></tr></tbody></table>
+<h2>FreeUnit Revival (late 2025 – present)</h2>
+<p><strong>Revival by Евгений Фрост (TuzelKO).</strong> Started late 2024 / early 2025.</p>
+<h3>Pre-release work</h3>
+<table><thead><tr><th>Date</th><th>What</th></tr></thead><tbody><tr><td>Sep 2024</td><td>Release process documented</td></tr><tr><td>Oct 2025</td><td>Python 3.14 Docker images, init-1.35 branch</td></tr><tr><td>Late 2025</td><td>Infrastructure: CI, Docker, GHCR, .deb packages rebuilt</td></tr></tbody></table>
+<h3>Releases (6 in 3.5 months)</h3>
+<table><thead><tr><th>Version</th><th>Date</th><th>What</th></tr></thead><tbody><tr><td><strong>FreeUnit 1.35.1</strong></td><td>Apr 3, 2026</td><td>First release. Project revived. Community fork announced.</td></tr><tr><td><strong>1.35.2</strong></td><td>Apr 4, 2026</td><td>Next day. Rapid iteration.</td></tr><tr><td><strong>1.35.3</strong></td><td>Apr 7, 2026</td><td></td></tr><tr><td><strong>1.35.4</strong></td><td>Apr 30, 2026</td><td></td></tr><tr><td><strong>1.35.5</strong></td><td>May 29, 2026</td><td>Stable. Milestone closed.</td></tr><tr><td><strong>1.36.0</strong></td><td>Jul 17, 2026</td><td>Security hardening release. 38+ fixes. Graceful shutdown. OTel 0.32.</td></tr></tbody></table>
+<h3>Key numbers</h3>
+<ul><li><strong>236 commits</strong> from revival to 1.36.0</li><li><strong>~140 open PRs merged</strong> (from issue #139 being the merge of pre-1.35.6)</li><li><strong>Docker images:</strong> PHP 8.3/8.4/8.5, Python 3.13/3.14, multi-arch (amd64 + arm64)</li><li><strong>.deb packages:</strong> Debian Trixie, with SHA256SUMS verification</li></ul>
+<h3>Community</h3>
+<table><thead><tr><th>Metric</th><th></th><th></th></tr></thead><tbody><tr><td><strong>Team</strong></td><td>Alexander (founder), Andrey (maintainer), 5+ contributors</td></tr><tr><td><strong>GitHub org</strong></td><td>freeunitorg</td></tr><tr><td><strong>License</strong></td><td>Apache 2.0 (unchanged from upstream)</td></tr><tr><td><strong>Release model</strong></td><td>Security ≤7 days, minor every 8-12 weeks, LTS 2 years</td></tr></tbody></table>
+<p><strong>Early community interest (pre-revival):</strong> 2023-06-09 — Pavel Zavadski (GitHub <code>Pavlusha311245</code>; Telegram <code>@Pavlusha2Sniper</code>) publishes a Habr tutorial about NGINX Unit ("Простым языком о простом NGINX UNIT", ~22K readers). He later becomes a <strong>FreeUnit contributor</strong>. The tutorial documents the pre-fork architecture (JSON config, REST API, /status, language modules, TLS via /certificates) — a useful "before" baseline for the "what FreeUnit added" narrative.</p>
+<p><strong>Timeline note (2026-08-31, verified):</strong> the Habr author Pavel Zavadski is the same person now contributing to FreeUnit — Telegram <code>@Pavlusha2Sniper</code>, GitHub <code>Pavlusha311245</code>. (Two handles, one person; not two accounts.)</p>
+<h3>What sets FreeUnit apart from upstream Unit</h3>
+<ul><li>Active development (upstream archived)</li><li>Security hardening (14 audit vectors, 2 GHSA advisories)</li><li>OpenTelemetry 0.24→0.32 with gRPC</li><li>Graceful shutdown (SIGQUIT)</li><li>njs 1.0.0</li><li>wasmtime 36 (CVE fixes)</li><li>TrueAsync experimentation</li><li>Alternative-dispatch protocol research</li><li>Roadmap: P4 persistent workers, prototype+fork shared opcache, body streaming</li></ul>
+<h3>Adjacent project (same founder)</h3>
+<table><thead><tr><th>Project</th><th>Status</th></tr></thead><tbody><tr><td><strong>freeunit2</strong></td><td>PoC: Rust orchestrator + NTS PHP workers. Complete.</td></tr></tbody></table>
+<h3>Digest webhook secret handling (2026-09-03)</h3>
+<table><thead><tr><th>Variant</th><th>Result</th><th>Expectation</th></tr></thead><tbody><tr><td>Hardcoded HMAC secret in digest prompt</td><td>Removed: leaked into every run output</td><td>Never store secrets in prompts</td></tr><tr><td>Job-scoped notepad KV</td><td>Adopted: set/get roundtrip ok, HMAC builds from it, prompt holds reference only</td><td>Agent reads secret at runtime, never prints/logs it</td></tr><tr><td>Host env var</td><td>Pending: only admin edits env</td><td>Operator sets it, prompt references $NAME</td></tr><tr><td>External manager (Bitwarden/1Password)</td><td>Rejected as heavy for one secret</td><td>Revisit if secret count grows</td></tr><tr><td>Delivery to receiver</td><td>404 unknown route / 401 bad signature (receiver rotated secret)</td><td>Delivery stays down until receiver re-pins route + secret; digest relies on local output channel</td></tr></tbody></table>
+<script src="/freeunit-kb/assets/kb.js"></script>
+</body></html>

@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>engineering/1371-milestone-triage</title>
+<link rel="stylesheet" href="/freeunit-kb/assets/kb.css">
+</head><body>
+<nav class="crumbs"><a href="/freeunit-kb/index.html">index</a> / engineering/1371-milestone-triage</nav>
+
+<h1>engineering/1371-milestone-triage</h1>
+
+<h1>Milestone 1.37.1 triage — what ships in the patch, what moves out</h1>
+<p>_2026-10-12 19:50 UTC (network clock; the session date was a day stale). Evidence: live <code>gh api</code> calls, each item's head SHA vs its last review commit, checks on head. Our PAT is read-only on both repos (verified: <code>git push --dry-run</code> to <code>freeunitorg/freeunit-exp</code> → 403 "Permission … denied to andypost"), so this is a dossier for Andrey / the workbench bot, not a set of posted comments._</p>
+<h2>State</h2>
+<ul><li>Live <code>master</code> <code>8492d5ee</code>; <code>version</code> 1.37.0 / 13700; CHANGES top section</li></ul>
+<p><code>Changes with FreeUnit 1.37.1   04 Oct 2026</code> → <strong>26 entries: 23 Bugfix, 3 Change</strong>.</p>
+<ul><li>Milestone <strong>1.37.1: 12 open</strong> (was 15 a day ago), <strong>1.37.2: 4 open</strong>, 1.38: 14.</li><li>Since the previous check: <strong>#646 merged, #625 closed as the duplicate it was</strong></li></ul>
+<p>(so the duplicate pair is resolved), <strong>#558 merged</strong> (wasmtime C API).</p>
+<h2>Triage of the 12 open items</h2>
+<p>Policy applied: 1.37.1 is a <strong>patch</strong> release (security/DoS and bug fixes only); a feature cannot ride in a patch whatever its size.</p>
+<table><thead><tr><th>#</th><th>Kind</th><th>What</th><th>Evidence</th><th>Verdict</th></tr></thead><tbody><tr><td>451</td><td>PR <code>feat</code></td><td>USDT probes behind <code>--usdt</code></td><td>+287/−0, 22 files, checks 25 ok / 5 skipped, review at head</td><td><strong>MOVE → 1.37.2</strong> (feature)</td></tr><tr><td>453</td><td>PR <code>feat</code></td><td>Docker Drupal dev-kit image</td><td><strong>base = <code>feat/schedules</code></strong>, draft, +8237/−75, 93 files, 5 commits, checks partly cancelled</td><td><strong>MOVE → 1.37.2</strong> (feature; also stacked on another feature branch, cannot merge to master as-is)</td></tr><tr><td>551</td><td>PR <code>feat</code></td><td>opt-in PCRE2 JIT</td><td>draft, +532/−15, no reviews</td><td><strong>MOVE → 1.37.2</strong> (feature, draft)</td></tr><tr><td>617</td><td>PR <code>ci</code></td><td>run unitd and serve a request on macOS</td><td>draft, 1 file, checks 5 ok</td><td><strong>MOVE → 1.37.2</strong> (CI, not a patch blocker)</td></tr><tr><td>685</td><td>PR <code>ci</code></td><td>hook gate in the ASan C-tests leg</td><td>1 file, checks 30 ok</td><td>move or ride — does not block the tag</td></tr><tr><td>666</td><td>ISSUE</td><td>compression: first body part uncompressed past ~1 KiB headers</td><td>no PR</td><td><strong>fix needed</strong> (bugfix, in scope for 1.37.1)</td></tr><tr><td>667</td><td>ISSUE</td><td>router: request arriving at startup can hang forever</td><td>no PR</td><td><strong>fix needed</strong> (bugfix, in scope)</td></tr><tr><td>670</td><td>PR</td><td>router: compress the body part sent with response headers</td><td>checks 30 ok, <strong>no review</strong></td><td>review + merge</td></tr><tr><td>671</td><td>PR</td><td>router: publish the engine port before the engine thread starts</td><td>checks 30 ok, <strong>no review</strong></td><td>review + merge</td></tr><tr><td>659</td><td>PR</td><td>lib: keep scanning mountinfo past unrelated cgroup2 mounts</td><td>checks 30 ok, <strong>no review</strong></td><td>review + merge</td></tr><tr><td>638</td><td>PR</td><td>libunit: send the response through the port queue again</td><td><strong>head <code>8ee100c1</code> ≠ reviewed <code>05658304</code></strong>, +2067/−162, 7 files, checks 30 ok</td><td><strong>re-review at head</strong>, then decide (size argues for 1.37.2)</td></tr><tr><td>683</td><td>PR</td><td>port: arm the write event when an inline send queues the rest</td><td><strong>head <code>44619d55</code> ≠ reviewed <code>44df462f</code></strong>, +450/−0, checks 30 ok</td><td><strong>re-review at head</strong>, then merge</td></tr></tbody></table>
+<h2>The two findings worth acting on</h2>
+<ol><li><strong>Two PRs are reviewed at a commit that is no longer their head</strong> (#638, #683).</li></ol>
+<p>The review comments are anchored to the older SHA, so the review does not cover what would merge. Both have green checks on head (30 each) — green CI is not a review. #638 is the heavier one: <strong>+2067/−162 across 7 files</strong> in a <em>patch</em> release, touching libunit's response path.</p>
+<ol><li><strong>Three features sit in a patch milestone</strong> (#451, #453, #551) plus #453 is built</li></ol>
+<p>on <code>feat/schedules</code> rather than <code>master</code>, so it is not mergeable to master at all until that branch lands. Moving them to 1.37.2 costs nothing and unblocks the tag.</p>
+<h2>Ready-to-post texts (plain markdown, English)</h2>
+<p>For #638:</p>
+<blockquote><p>The last review is anchored to <code>05658304</code>; the head is now <code>8ee100c1</code>, so the review does not cover the code that would merge. Please re-review at head — the change is +2067/−162 over 7 files in the libunit response path, which is large for a patch release. If the re-review finds anything structural, this belongs in 1.37.2 rather than 1.37.1.</p></blockquote>
+<p>For #683:</p>
+<blockquote><p>The last review is anchored to <code>44df462f</code>; the head is now <code>44619d55</code>. Checks are green on head, but the review predates it — a fresh pass at head is needed before merge.</p></blockquote>
+<p>For the milestone (exp issue #11 or a maintainer note):</p>
+<blockquote><p>1.37.1 is a patch release, so #451, #453 and #551 (all features, #453 also based on <code>feat/schedules</code>) move to 1.37.2; #617/#685 are CI-only and do not block the tag. The patch is then #666 and #667 (no PR yet), plus the mergeable bugfix PRs #659/#670/#671 and #638/#683 once re-reviewed at head.</p></blockquote>
+<h2>Hand-off</h2>
+<p>Our PAT cannot write here (403 on push; issues/PR writes were already 403). Either Andrey posts the three texts and moves the milestone, or the workbench bot does — the command shape is <code>gh issue edit &lt;n&gt; --repo freeunitorg/freeunit --milestone 1.37.2</code> and <code>gh pr comment &lt;n&gt; --repo freeunitorg/freeunit --body-file &lt;file&gt;</code>.</p>
+<h2>Related</h2>
+<ul><li><code>releases/1.37.1-plan.md</code> — the release plan this triage feeds</li><li><code>engineering/freeunit-satellite-repos-2026-10.md</code> — the workbench fork and its rules</li></ul>
+<script src="/freeunit-kb/assets/kb.js"></script>
+</body></html>

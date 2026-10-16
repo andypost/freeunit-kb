@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>engineering/scaleway-benchmark-plan</title>
+<link rel="stylesheet" href="/freeunit-kb/assets/kb.css">
+</head><body>
+<nav class="crumbs"><a href="/freeunit-kb/index.html">index</a> / engineering/scaleway-benchmark-plan</nav>
+
+<h1>engineering/scaleway-benchmark-plan</h1>
+
+<h1>Scaleway Benchmark Plan</h1>
+<h2>Why Scaleway</h2>
+<table><thead><tr><th>Factor</th><th>Scaleway</th><th>Hetzner</th></tr></thead><tbody><tr><td>Billing</td><td><strong>Per minute</strong> — exact</td><td>Per hour — round up</td></tr><tr><td>Instance for 30 min bench</td><td>~€0.03</td><td>€0.30–2.50</td></tr><tr><td>CPU</td><td>AMD EPYC Milan, Ampere Altra (native ARM)</td><td>Intel Xeon (older gen)</td></tr><tr><td>Network</td><td>10 Gbps</td><td>1–10 Gbps</td></tr></tbody></table>
+<h2>Instance types for benchmarks</h2>
+<table><thead><tr><th>Instance</th><th>vCPU</th><th>RAM</th><th>SSD</th><th>Price/h</th><th>30 min cost</th><th>Best for</th></tr></thead><tbody><tr><td><strong>DEV1-L</strong></td><td>4</td><td>4GB</td><td>20GB</td><td>~€0.06</td><td>~€0.03</td><td>PHP benchmarks, low conn</td></tr><tr><td><strong>DEV1-XL</strong></td><td>8</td><td>8GB</td><td>40GB</td><td>~€0.12</td><td>~€0.06</td><td>C10K, 10k connections</td></tr><tr><td><strong>GP1-S</strong></td><td>2</td><td>4GB</td><td>—</td><td>~€0.12</td><td>~€0.06</td><td>Compare with current Hetzner</td></tr><tr><td><strong>GP1-M</strong></td><td>4</td><td>8GB</td><td>—</td><td>~€0.24</td><td>~€0.12</td><td>Drupal real-world bench</td></tr></tbody></table>
+<p><strong>Recommended:</strong> DEV1-XL (8 vCPU, 8GB) for serious C10K benchmarks — enough CPU for both the server AND the load generator (wrk/oha) on the same host.</p>
+<h2>Benchmark Scenarios</h2>
+<h3>Scenario 1: Low concurrency (128 conn, 10s)</h3>
+<pre><code class="language-bash">oha -n 100000 -c 128 --latency-correction \
+  http://localhost:8080/small-fixed-response.data</code></pre>
+<p>Goal: confirm baseline, compare against earlier 128-conn results:</p>
+<ul><li>FreeUnit: ~188K RPS</li><li>nginx+FPM: ~57K RPS</li></ul>
+<h3>Scenario 2: C10K (10,000 conn, 30s)</h3>
+<pre><code class="language-bash">oha -n 500000 -c 10000 --latency-correction \
+  http://localhost:8080/php-test.php</code></pre>
+<p>Goal: compare against earlier results:</p>
+<ul><li>FreeUnit: ~141K RPS</li><li>nginx+FPM: ~13K RPS</li></ul>
+<h3>Scenario 3: FreeUnit against a peer runtime (fresh data)</h3>
+<p>Run BOTH on same instance type, same kernel, same PHP version.</p>
+<h3>Scenario 4: ARM64 (Ampere Altra)</h3>
+<p>Create equivalent ARM64 instance, re-run scenarios 1-2. Check if ARM performance gap exists.</p>
+<h2>Benchmark toolkit</h2>
+<pre><code class="language-bash"># Tools to install on instance (boot script):
+apt install -y git make gcc pkg-config \
+  libpcre2-dev libssl-dev libxml2-dev \
+  php8.5-dev php8.5-cli php8.5-common \
+  libphp-embed  
+
+# Load generators:
+curl -LO https://github.com/hatoo/oha/releases/latest/download/oha-linux-amd64
+chmod +x oha-linux-amd64</code></pre>
+<h2>Cost</h2>
+<table><thead><tr><th>Scenario</th><th>Instance</th><th>Time</th><th>Cost</th></tr></thead><tbody><tr><td>128 conn, 3 stacks</td><td>DEV1-XL</td><td>30 min</td><td>€0.06</td></tr><tr><td>C10K, 3 stacks</td><td>DEV1-XL</td><td>30 min</td><td>€0.06</td></tr><tr><td>ARM64, same 2</td><td>ARM64-DEV1-XL</td><td>30 min</td><td>€0.06</td></tr><tr><td>Setup + teardown</td><td>—</td><td>30 min</td><td>€0.06</td></tr><tr><td><strong>Total</strong></td><td></td><td><strong>2 hours</strong></td><td><strong>~€0.24</strong></td></tr></tbody></table>
+<p>€0.24 за полную сессию бенчмарков — и знаешь точные цифры на свежем железе.</p>
+<h2>Execution (one command bootstrap)</h2>
+<pre><code class="language-bash"># 1. Create instance via CLI
+scw instance server create type=DEV1-XL \
+  zone=fr-par-1 image=debian-trixie
+
+# 2. Boot script does:
+#   - apt install build deps
+#   - clone freeunit and the peer runtime
+#   - build both
+#   - generate test content
+#   - run oha benchmarks in sequence
+#   - print results as table
+
+# 3. Instance auto-terminates after bench
+#   - ...or manually: scw instance server terminate</code></pre>
+<h2>Config template for FreeUnit benchmark</h2>
+<p>Create <code>bench-config.json</code>:</p>
+<pre><code class="language-json">{
+  &quot;listeners&quot;: {
+    &quot;*:8080&quot;: { &quot;pass&quot;: &quot;applications/bench&quot; }
+  },
+  &quot;applications&quot;: {
+    &quot;bench&quot;: {
+      &quot;type&quot;: &quot;php&quot;,
+      &quot;root&quot;: &quot;/var/bench/web&quot;,
+      &quot;script&quot;: &quot;index.php&quot;,
+      &quot;processes&quot;: { &quot;max&quot;: 8 }
+    }
+  }
+}</code></pre>
+<p>Simple test PHP:</p>
+<pre><code class="language-php">&lt;?php
+echo &quot;ok&quot;;</code></pre>
+<p>And a small static file for baseline.</p>
+<script src="/freeunit-kb/assets/kb.js"></script>
+</body></html>

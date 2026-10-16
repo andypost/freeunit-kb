@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>engineering/hardening-configure-pr444</title>
+<link rel="stylesheet" href="/freeunit-kb/assets/kb.css">
+</head><body>
+<nav class="crumbs"><a href="/freeunit-kb/index.html">index</a> / engineering/hardening-configure-pr444</nav>
+
+<h1>engineering/hardening-configure-pr444</h1>
+
+<h1>--hardening: configure mechanics and measured behaviour (PR #444)</h1>
+<p>Reviewed at head <code>3bb54805f22e</code> (build/hardening), 2026-09-26. All numbers below are from executed runs, not from reading.</p>
+<h2>How the flag reaches the build</h2>
+<ul><li><code>auto/cc/hardening</code> is sourced from <code>configure</code> right after <code>auto/cc/test</code>; the whole</li></ul>
+<p>block is inside <code>if [ $NXT_HARDENING != off ]</code>, so the default build is untouched.</p>
+<ul><li>Each compiler flag is probed by compiling <code>$NXT_CFLAGS $flag $NXT_CC_OPT $CFLAGS -Werror</code></li></ul>
+<p>(same order as <code>auto/make</code>'s <code>CFLAGS = $NXT_CFLAGS $NXT_CC_OPT $CFLAGS</code>), each linker flag by linking a trivial program with <code>$NXT_LD_OPT $flag</code>.</p>
+<ul><li>Linker flags are probed with <code>-Wl,--fatal-warnings</code> (itself probed first), because GNU ld</li></ul>
+<p>only warns about an unknown <code>-z</code> keyword and still exits 0. The fatal-warnings flag is used for probes only, never appended to <code>NXT_LD_OPT</code>.</p>
+<ul><li><code>NXT_LD_OPT</code> is consumed by <code>auto/make</code>: <code>NXT_EXEC_LINK</code> (unitd, modules, test binaries) and</li></ul>
+<p><code>NXT_SHARED_LOCAL_LINK</code> (libnxt.so). Verified end to end in the generated Makefile.</p>
+<ul><li><code>set +e</code> around the probes, <code>set -e</code> after: <code>auto/cc/test</code> does the same (its line 152), so</li></ul>
+<p>errexit is restored identically in every mode — no mode-dependent error semantics.</p>
+<h2>Measured (musl-gcc 11.2.1, GNU ld 2.37, x86_64)</h2>
+<ul><li><code>--hardening=off</code> vs an unoptioned build of master: <code>CFLAGS</code> line identical, generated</li></ul>
+<p>Makefile differs only by the new test object. The "no change unless asked" claim holds.</p>
+<ul><li><code>--hardening=default</code> lands `-fstack-protector-strong -fstack-clash-protection</li></ul>
+<p>-fcf-protection -D_FORTIFY_SOURCE=3<code> plus </code>-z relro -z now -z noexecstack<code> in the link recipes; </code>-mbranch-protection=standard` is correctly rejected on x86_64.</p>
+<ul><li><code>--hardening=strict</code> adds <code>-Wformat=2 -Wvla -Wimplicit-fallthrough</code>; with GCC 11</li></ul>
+<p><code>-ftrivial-auto-var-init=pattern</code> is correctly skipped (GCC 12+ flag).</p>
+<ul><li>Strict vs default, 162 sources the Makefile lists, compiled with the real flags and the</li></ul>
+<p>in-tree <code>-Werror</code>: <strong>identical outcome, zero new failures.</strong> So the 17 <code>nxt_fallthrough</code> sites and the remaining <code>/<em> Fall through. </em>/</code> in <code>nxt_epoll_engine.c</code> (blank line before the label, GCC's default comment heuristic) warm nothing, and <code>-Wformat=2</code>/<code>-Wvla</code> are quiet.</p>
+<ul><li>Invalid or empty <code>--hardening=</code> value: <code>configure</code> exits 1 with `invalid value ... Valid</li></ul>
+<p>values are: off, default, strict`.</p>
+<ul><li>Fortify probe semantics:</li><li><code>--cc-opt=-O0</code> (and <code>CFLAGS=-O0</code>): both <code>=3</code> and <code>=2</code> report "not found" — the probe's own</li></ul>
+<p><code>#ifndef __OPTIMIZE__ / #error</code> fires, so FORTIFY is skipped rather than misreported.</p>
+<ul><li>libc whose headers warn at level 3 (simulated with a <code>#warning</code> shim on the include path):</li></ul>
+<p><code>=3 ... not found</code>, <code>=2 ... found</code>, and <code>NXT_CFLAGS</code> carries <code>=2</code>. The fallback works.</p>
+<ul><li>On Linux the <code>_FORTIFY_SOURCE</code> part is inert for core objects: <code>src/nxt_unix.h</code> <code>#undef</code>s it</li></ul>
+<p>before the libc headers (pre-existing behaviour, unchanged by the PR). The flag still reaches the link recipes and the compiler-level protections are unaffected.</p>
+<h2>Gaps worth one line</h2>
+<ul><li>No CI leg builds with <code>--hardening</code>; the whole path is exercised by hand only.</li><li><code>auto/help</code> advertises <code>_FORTIFY_SOURCE</code> without the <code>nxt_unix.h</code> caveat.</li></ul>
+<script src="/freeunit-kb/assets/kb.js"></script>
+</body></html>

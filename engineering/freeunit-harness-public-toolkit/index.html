@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>freeunit-harness — the public contributor toolkit</title>
+<link rel="stylesheet" href="/freeunit-kb/assets/kb.css">
+</head><body>
+<nav class="crumbs"><a href="/freeunit-kb/index.html">index</a> / engineering/freeunit-harness-public-toolkit</nav>
+
+<h1>freeunit-harness — the public contributor toolkit</h1>
+<table class="meta"><tr><th>description</th><td>freeunitorg/freeunit-harness: what the published repo contains, what it binds contributors to, and how it maps onto our own lanes</td></tr><tr><th>format</th><td>open-knowledge-format-v1</td></tr><tr><th>updated</th><td>2026-10-10</td></tr><tr><th>maintainer</th><td>andypost</td></tr></table>
+<h1>freeunit-harness (public, published 2026-10-10)</h1>
+<p>Explored 2026-10-10 at commit <code>6edb775a</code> ("freeunit-harness: initial public import"). The repo is a <strong>fresh, squashed public import</strong>: one commit, no history rewrite (<code>docs/public-harness-plan.md</code> §2 explains the decision — every private line was also in HEAD, so a rewrite buys nothing and leaks on the first miss). The private working repo stays unremote'd.</p>
+<h2>Shape</h2>
+<table><thead><tr><th>Fact</th><th>Value</th></tr></thead><tbody><tr><td>repo</td><td><code>freeunitorg/freeunit-harness</code>, public, Apache-2.0, default branch <code>main</code></td></tr><tr><td>created</td><td>2026-10-10 21:29Z; single commit, author Andy Postnikov</td></tr><tr><td>size</td><td>3.2 MB, 234 files, <strong>no workflows, no issues, no PRs</strong></td></tr><tr><td>entry points</td><td><code>Makefile</code> (249 lines, ~25 targets), <code>AGENTS.md</code> (193 lines), <code>CLAUDE.md</code> → symlink to it</td></tr><tr><td>skills</td><td>9, in Agent Skills format (<code>name</code> + <code>description</code>): freeunit-{benchmark,build,cross-arch,debug,release,review,security,test,verify}, each with <code>references/</code></td></tr><tr><td>agent briefs</td><td>7 narrow roles + generated twins in <code>.claude/agents/</code> and <code>.opencode/agents/</code>: ci-watcher, adversarial-reviewer, independent-verifier, release-orchestrator, remote-builder, packaging-archaeologist, perf-runner</td></tr><tr><td>docs</td><td>22 pages, 13 of them under <code>docs/perf/</code> (perf-lab, drupal benchmark plan, LTO/PGO, OTel overhead, pc2/JIT, …)</td></tr><tr><td>tools</td><td>39 (<code>tools/task</code> ledger, <code>tools/inbox</code> bus, <code>tools/check-public.sh</code>, <code>tools/gates/run-gates</code> G1–G6, <code>tools/perf-<em></code>, <code>tools/session-extract/</em></code>, <code>tools/unit-build</code>, <code>tools/test-isolated</code>)</td></tr><tr><td>perf lab</td><td><code>tools/perf-lab/</code> with 34 <code>.job</code> files and patches</td></tr><tr><td>boundary</td><td><code>run/</code> (server notes, <code>run/ghsa/</code>, raw bench data), the plaintext deny list, the HMAC key and the model price table stay private forever</td></tr></tbody></table>
+<h2>What it binds contributors to</h2>
+<ul><li><code>docs/agent-coordination.md</code> §2 is a three-tier authority table: <em>on its own</em> / *named job</li></ul>
+<p>from the maintainer* / <em>Claude only</em>. Push, force-push and posting on GitHub are in the third column; <code>docs/</code> and <code>skills/</code> are maintainer-only (agents may send a patch).</p>
+<ul><li>Findings pipeline: <code>run/agent-findings/&lt;agent&gt;-&lt;date&gt;-&lt;topic&gt;.md</code> → <code>tools/clean-findings.py</code></li></ul>
+<p>→ a second agent replays the Repro and sets <code>verified</code> → <code>kb-pending/&lt;topic&gt;.md</code> → maintainer promotes, weekly, one page per commit, finding named in the body.</p>
+<ul><li><code>AGENTS.md</code> says the four pages <code>review-pipeline.md</code>, <code>model-routing.md</code>,</li></ul>
+<p><code>context-priming.md</code> and <code>agent-coordination.md</code> "describe the maintainer's own Claude setup. They are background, not instructions for you."</p>
+<ul><li>Rules that cost hours when skipped, from <code>agents/README.md</code> (each dated, each from a real</li></ul>
+<p>incident): name the revision you read; "verified" must name the external fetch or the executed command; a watch is something you finish, not something you start; every loop gets a deadline and a liveness check; agents share one checkout — disjoint files, no git state; every report ends with what you could not verify. <code>AGENTS.md</code> adds: never build in a checkout you are editing, <code>*:8080</code> is host-wide and <code>--port N</code> since <code>2149f582</code> is the fix, cloud machines you start are yours to delete (name, owner tag, expiry, delete IP <strong>and</strong> volumes).</p>
+<h2>What we verified by running it</h2>
+<ul><li><code>tools/check-public.sh --all</code> → exit 0 on the published tree. Its own fixtures:</li></ul>
+<p><code>uv run --with pytest pytest tools/tests/test_check_public.py</code> → <strong>14 passed, 17 subtests</strong>.</p>
+<ul><li>The same gate over <strong>our</strong> <code>freeunit-exp</code> content (<code>reviews/PR-645.md</code>, <code>findings/T1-php-option-type.md</code>,</li></ul>
+<p><code>findings/T2-drupal-drush-install.md</code>) → <strong>exit 0</strong>. The maintainer's own scrub rules accept what we publish in the workbench.</p>
+<ul><li>The HMAC layer of <code>docs/public-harness-plan.md</code> §3 is <strong>not implemented</strong> (TODO in the script</li></ul>
+<p>header): only the generic ERE rules in <code>tools/public-deny.txt</code> + <code>public-allow.txt</code> run today.</p>
+<h2>Relationship to our lanes</h2>
+<ul><li><strong>The Hermes bot is absent from the public harness.</strong> <code>rg</code> for</li></ul>
+<p><code>hermes|freeunit-agent|freeunit-exp|workbench</code> over the tree: <strong>0 hits</strong>. The bot lane lives in the private side (<code>HERMES.md</code> in the fork, <code>research/</code>, and the harness's private <code>run/</code>).</p>
+<ul><li><strong>Policy tension worth reconciling in one line each.</strong> <code>agent-coordination.md</code> §2 puts push and</li></ul>
+<p>GitHub posting in the <em>maintainer-only</em> tier; <code>HERMES.md</code> in <code>freeunit-exp</code> grants the bot branches and PRs <em>inside the fork</em>. Both are the maintainer's documents, one is explicitly "background, not instructions" — say which governs.</p>
+<ul><li><strong>Name collisions with our own skills.</strong> The harness ships <code>freeunit-benchmark</code>, <code>freeunit-review</code>,</li></ul>
+<p><code>freeunit-test</code>, <code>freeunit-release</code>, <code>freeunit-verify</code>; we have Hermes skills with overlapping names but different content (ours: Scaleway orchestration, PR verification against real branch code, PHP stand, Docker ops). Loading the wrong one is the failure mode.</p>
+<ul><li><strong>CI is not there yet.</strong> The plan phases put <code>check-public</code>, <code>agents-check</code> and <code>shellcheck</code> in</li></ul>
+<p>phase 2 (2026-10-12 → 2026-10-18); today the repo has no workflows, so the gate is local-only and we must call it ourselves.</p>
+<ul><li><strong>Tooling we can reuse as-is</strong> (all python3-stdlib or shell, verified working):</li></ul>
+<p><code>tools/check-public.sh</code> as a pre-push gate for workbench branches, <code>tools/gates/run-gates</code> (G5/G6 need no build; G1–G4 refuse without <code>--allow-local-build</code>), <code>tools/watch-run.sh</code> for "is this run terminal yet", <code>tools/new-failures.sh</code> for regression deltas.</p>
+<h2>See also</h2>
+<ul><li><code>references/gh-identity-plan.md</code> in the <code>freeunit-github-ops</code> skill — the workbench fork, the</li></ul>
+<p>App identity and the credential tooling that this repo's rules now sit beside.</p>
+<script src="/freeunit-kb/assets/kb.js"></script>
+</body></html>

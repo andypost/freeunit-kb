@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>engineering/ci-pipeline-balance</title>
+<link rel="stylesheet" href="/freeunit-kb/assets/kb.css">
+</head><body>
+<nav class="crumbs"><a href="/freeunit-kb/index.html">index</a> / engineering/ci-pipeline-balance</nav>
+
+<h1>engineering/ci-pipeline-balance</h1>
+
+<h1>CI pipeline balance — FreeUnit "Build &amp; Test (Linux)"</h1>
+<p>Measured 2026-09-15 over the last 10 completed runs of the workflow (per-leg medians, <code>jobs</code> API: duration = completed−started, wait = started−run created). Post-#395/#396 state.</p>
+<h2>Per-leg medians (seconds)</h2>
+<table><thead><tr><th>leg</th><th>dur</th><th>wait</th></tr></thead><tbody><tr><td>python-3.12</td><td>378</td><td>183</td></tr><tr><td>python-3.13</td><td>363</td><td>188</td></tr><tr><td>wasm-wasi-component</td><td>330</td><td>180</td></tr><tr><td>java-26 / 25 / 21 / 17</td><td>293 / 288 / 287 / 275</td><td>206 / 217 / 206 / 122</td></tr><tr><td>python-3.14</td><td>290</td><td>221</td></tr><tr><td>unit</td><td>281</td><td>232</td></tr><tr><td>go-1.25 / 1.26</td><td>226 / 220</td><td>281 / 152</td></tr><tr><td>node-20/26/22/24</td><td>196 / 194 / 188 / 182</td><td>229 / 233 / 251 / 202</td></tr><tr><td>ruby-3.3/3.4/4.0</td><td>177 / 167 / 164</td><td>186 / 196 / 196</td></tr><tr><td>perl / php-8.4 / php-8.5 / php-8.3</td><td>165 / 164 / 164 / 156</td><td>100 / 267 / 204 / 167</td></tr><tr><td>wasm</td><td>73</td><td>92</td></tr><tr><td>compression-range-tests</td><td>50</td><td>62</td></tr><tr><td>openssl4 / c-tests / prepare</td><td>39 / 38 / 5</td><td>61 / 66 / 70</td></tr></tbody></table>
+<p>Sum of per-leg medians: <strong>5353s = 89 min</strong> of runner time per run. 26-27 legs.</p>
+<h2>Where the time goes</h2>
+<p>Step-level (job 35003199963): every matrix leg pays the same fixed cost — <code>Configure unit</code> ~6s + <code>Make unit</code> 43-49s + caches/checkout/installs ~35-45s ≈ <strong>85-100s</strong>, then runs only its own module + pytest (python 287s, unit 196s, java 209s, node 114s). All 26 matrix legs share ONE <code>Configure unit</code> definition (same flags), so that build is identical across legs and is the same work repeated 26 times: <strong>~37-43 min of the 89</strong>.</p>
+<p>Test-level wins already landed (same day): <code>Connection: close</code> default (unit leg −259s vs 270s predicted from the 9 affected one-shot sites), python-leg sharding (#396, −7.8..−9.0 min per leg), <code>test_asgi_websockets_large</code> 30.21s → 0.22s (measured, lands with #398).</p>
+<h2>Span is scheduling-bound, not work-bound</h2>
+<p>Observed run spans (max(completed)−min(started)): 512-910s; longest leg 380s; max simultaneous jobs inside one run: 11-25 (varies — the concurrency budget is repo-wide and shared with the other PR runs in flight). So 130-530s of each span is queue wait, and the per-leg medians wait 60-281s before starting.</p>
+<p>Floor: with a dedicated 20-slot budget, sum/slots = 268s, longest leg = 378s → makespan ≈ longest leg ≈ 6.3 min. Today's 8.5-15 min is contention, not test design.</p>
+<h2>Levers, ranked by measured payoff</h2>
+<ol><li><strong>Build the core once, hand it to the legs as an artifact.</strong> All legs configure the core</li></ol>
+<p>identically, so one <code>build</code> job (or <code>prepare</code>) can upload <code>build/</code>; legs then only <code>configure &lt;module&gt;</code> + <code>make &lt;module&gt;</code>. Saves ~45-55s × 25 ≈ <strong>−19 min/run</strong> and shortens every short leg (node 214→~160s).</p>
+<ol><li><strong>Fold same-work runtime versions into one job</strong> (node 4→2, ruby 3→2, php 3→2). The win is</li></ol>
+<p>not test time but the repeated ~90s fixed cost plus one less scheduling slot; 6 fewer legs ≈ −9 min/run. Do NOT fold java (two versions in one job → ~500s critical path, worse than today's 380s longest) or python (the three versions carry the sharded shared suite, #396).</p>
+<ol><li><strong>Consolidate the tail:</strong> c-tests (38s) + openssl4 (39s) + wasm (73s) as one job = one slot</li></ol>
+<p>for ~150s instead of three slots — marginal, but frees two slots.</p>
+<ol><li><strong>Fairness between concurrent runs:</strong> per-matrix <code>max-parallel</code> makes the queue move evenly</li></ol>
+<p>instead of one run taking the whole budget; it does not speed a single run. Only worth it if the queue, not the run, is the pain.</p>
+<ol><li><strong>Coverage is not the knob.</strong> The version matrices are the point; the duplication that was</li></ol>
+<p>removable (shared suite × 3 python legs) is already gone via sharding.</p>
+<script src="/freeunit-kb/assets/kb.js"></script>
+</body></html>

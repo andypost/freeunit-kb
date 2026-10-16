@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>engineering/zen-quorum-aports-gcc-internal</title>
+<link rel="stylesheet" href="/freeunit-kb/assets/kb.css">
+</head><body>
+<nav class="crumbs"><a href="/freeunit-kb/index.html">index</a> / engineering/zen-quorum-aports-gcc-internal</nav>
+
+<h1>engineering/zen-quorum-aports-gcc-internal</h1>
+
+<h1>zen-quorum: aports gcc 16.2.0 MR — internal patch review (2026-09-03)</h1>
+<p>_Author: andypost. Draft MR. I read the actual diff myself (read_file on the changes JSON) — the tool-agent pass hit a transient 503 after the first read, so I extracted the per-file add/delete counts directly and reviewed._</p>
+<h2>Per-file read (adds/deletes) — KEY INSIGHT</h2>
+<table><thead><tr><th>file</th><th>+adds/-dels</th><th>meaning</th></tr></thead><tbody><tr><td>0001-LoongArch-conditional-move</td><td>+0/-124</td><td><strong>FULL DELETE</strong> — landed upstream in 16?</td></tr><tr><td>0001-tree-object-size PR122012</td><td>+0/-73</td><td><strong>FULL DELETE</strong> — landed upstream in 16?</td></tr><tr><td>0028-ada-adaint sched.h</td><td>+13/-37</td><td>PARTIAL LIVE — adaint.c half upstream, adaint.h musl fix stays</td></tr><tr><td>0029-configure-autolink-libatomic</td><td>+0/-245</td><td><strong>FULL DELETE</strong> — landed upstream</td></tr><tr><td>0034-libgnat-time_t-64-musl</td><td>+0/-22</td><td><strong>FULL DELETE</strong> — landed upstream</td></tr><tr><td>0037-loongarch-disable-multilib</td><td>+4/-3</td><td>LIVE (small)</td></tr><tr><td>0039-except-cached-gcc_except_val</td><td>+0/-73</td><td><strong>FULL DELETE</strong></td></tr><tr><td>0042-libsanitizer-struct_sock_fprog</td><td>+0/-30</td><td><strong>FULL DELETE</strong></td></tr><tr><td>0043-libsanitizer-kernel-head</td><td>+0/-60</td><td><strong>FULL DELETE</strong></td></tr><tr><td>APKBUILD</td><td>+8/-25</td><td>live rebuild under 16.2 with fewer patches</td></tr></tbody></table>
+<h2>What this actually is</h2>
+<p><strong>This MR is a PATCH-PRUNE</strong>, not a stale draft. Between the MR's base (gcc 16.1 era) and gcc <strong>16.2.0</strong>, most of these musl/arch patches were <strong>upstreamed into vanilla GCC</strong> — so the diff shows them being DELETED (a patch file removed from the aport), not added. The +0/-N counts are the deletions. The MR modernizes <code>main/gcc</code> to track 16.2.0 by dropping now-redundant patches and keeping only the ones still needed:</p>
+<ul><li><strong>0028-ada-adaint.sched.h</strong> (+13/-37): still partially needed — adaint.c landed but</li></ul>
+<p>adaint.h's <code>cpu_set_t</code> musl fix did not. This is the one real SURVIVING patch.</p>
+<ul><li><strong>0037-loongarch-multilib</strong> (+4/-3): small live adjust.</li><li><strong>APKBUILD</strong> (+8/-25): 16.2.0 version bump + reduced patch list.</li></ul>
+<h2>Assessment (hypothesis, after reading the diff)</h2>
+<ul><li>The MR is <strong>NOT stale-by-version</strong> (16.2.0 current) and **NOT really "abandoned"</li></ul>
+<p>in effect** — it's a waiting pru: most work already merged upstream, so the aport needs only a few surviving patches.</p>
+<ul><li>The 3 lines with +0/-N are simply patch deletions (upstreamed), which is CORRECT</li></ul>
+<p>hygiene — but they only make sense if they were re-checked against actual 16.2 tree.</p>
+<ul><li>Redundancy risk (laguna SPOT): deleting a patch that did NOT actually land upstream</li></ul>
+<p>would break the build. The +0/-N alone can't prove each deletion is safe — that needs a real build, not a diff read.</p>
+<h2>Verdict shape</h2>
+<ul><li><strong>Correct action: revive (B)</strong> — bump to 16.2.0, keep only 0028+0037-style patches,</li></ul>
+<p>re-verify deletions are genuinely upstream, run a build. NOT close (C).</p>
+<ul><li>The earlier "C — close/abandon" (laguna) was based on the activity-only view; reading</li></ul>
+<p>the diff shows the MR has real surviving content → B is more accurate.</p>
+<h2>Caveat</h2>
+<p>The tool-agent could not complete a second read (503 after first read_file). The per-file counts above are from the changes JSON read directly by me — authoritative on add/delete counts, but "is each deletion safe?" requires an actual build/test, which is out of scope for model-review here.</p>
+<h2>Tool fix + independent confirmation (2026-09-03, after adding offset + grep_in_file)</h2>
+<p>Two tool bugs found in the comparison run and FIXED in <code>zen_tool_agent.py</code>:</p>
+<ol><li><code>read_file</code> now takes offset/limit (pagination) — was returning the same chunk</li></ol>
+<p>repeatedly, so the model looped on one patch.</p>
+<ol><li>added <code>grep_in_file(path, pattern)</code> — the model was reaching for <code>rg_search</code></li></ol>
+<p>on a single file and failing (rg_search is tree-scoped); now it can grep one file.</p>
+<p>Independently confirmed the patch-prune via <code>grep_in_file</code> on the MR diff:</p>
+<pre><code>433: -pkgver=15.2.0
+434: +pkgver=16.2.0</code></pre>
+<p>→ the APKBUILD bump (15.2.0 → 16.2.0) is real, and the +0/-N patch files are deletions (upstreamed). Confirms the MR is NOT a stale draft — it is a gcc 16.2 modernization (patch-prune), so the correct action is B (revive + build), not C.</p>
+<script src="/freeunit-kb/assets/kb.js"></script>
+</body></html>

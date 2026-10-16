@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>releases/1.37.0-in-flight-classification</title>
+<link rel="stylesheet" href="/freeunit-kb/assets/kb.css">
+</head><body>
+<nav class="crumbs"><a href="/freeunit-kb/index.html">index</a> / releases/1.37.0-in-flight-classification</nav>
+<p class="banner warn">unreleased; 152 commits on `master` since the `1.36.1` tag (29 Aug 2026).</p>
+<h1>releases/1.37.0-in-flight-classification</h1>
+
+<h1>FreeUnit 1.37.0 — in-flight release classification (checked 2026-09-17)</h1>
+<p><strong>Status:</strong> unreleased; 152 commits on <code>master</code> since the <code>1.36.1</code> tag (29 Aug 2026).</p>
+<h2>Classification: MINOR (1.37.0), confirmed against the tree</h2>
+<p>Andrey's call (2026-09-17): "Range и прочее скорее будут минором". The tree agrees — the unreleased section carries two user-visible features and several operator-visible breaking changes, so the release policy (patch = security/DoS fixes only; features / API / breaking changes → minor) puts it at 1.37.0.</p>
+<p>Entry tally in the unreleased section of <code>CHANGES</code> on <code>master</code>: 6 Security, 16 Change, 12 Bugfix, <strong>2 Feature</strong>.</p>
+<p>Features:</p>
+<ul><li><strong>byte-range requests for static files</strong> — single-range <code>Range: bytes=…</code> →</li></ul>
+<p><code>206</code> + <code>Content-Range</code>, unsatisfiable → <code>416</code>, <code>Accept-Ranges: bytes</code> on a plain 200, <code>If-Range</code> honoured (strong comparison), preconditions still evaluated first, multi-range deliberately answered with a full 200 (RFC 9110 permits). Served from a Range is not content-coded.</p>
+<ul><li><strong>conditional requests for static files</strong> — <code>If-None-Match</code> / <code>If-Modified-Since</code></li></ul>
+<p>→ <code>304</code>; <code>If-Match</code> / <code>If-Unmodified-Since</code> → <code>412</code>; weak comparison, <code>*</code> matches.</p>
+<p>Breaking / operator-visible Changes (why it cannot be a patch):</p>
+<ul><li><code>unitctl</code> no longer reads <strong>JSON5</strong> (and earlier in the same window: no <strong>hjson</strong>,</li></ul>
+<p>no <strong>YAML</strong>), no longer re-serializes a configuration file (sends it as written), no longer reorders members, and offers <strong>no HTTP/2</strong> in the TLS handshake it makes.</p>
+<ul><li><code>unitctl</code> TLS behind a <code>tls</code> Cargo feature (default on); the **musl build no longer</li></ul>
+<p>links a C TLS library** and refuses an <code>https://</code> control-socket address.</p>
+<ul><li>A content-coded response now carries a <strong>weak</strong> entity-tag.</li><li>Removals: GnuTLS/CyaSSL/PolarSSL backends, the fiber implementation, <code>nxt_mem_zone</code>,</li></ul>
+<p><code>nxt_queue.c</code>, the unused job cluster, the <code>nxt_dyld</code> wrapper.</p>
+<ul><li><strong>njs 1.0.1</strong> upgrade.</li></ul>
+<p>Security entries in the same section (announcement material — they are mixed into a minor, so they need to be stated explicitly):</p>
+<ul><li><code>access_log</code> string format no longer writes what a variable expanded to unescaped —</li></ul>
+<p><code>"%0d%0a"</code> in a URL put a real CRLF (and a forged record) into the log; bytes are now escaped nginx-style (<code>\xHH</code>). A log parser expecting raw bytes must be updated.</p>
+<ul><li>A port message queued because the peer's socket was not writable no longer borrows the</li></ul>
+<p>descriptors it carries (a port closed before the queue drained could name a closed or recycled descriptor) (#388).</p>
+<ul><li>Application processes no longer inherit <code>unitd</code>'s … (privileges/descriptors — read the</li></ul>
+<p>entry text before quoting).</p>
+<ul><li>Static-request and port-send descriptor leaks; <code>unitctl</code> dependency-pruning entry.</li></ul>
+<h2>Blocking issues for this release (re-checked 2026-09-28)</h2>
+<p>The <code>CHANGES</code> section header on <code>master</code> still reads <code>Changes with FreeUnit 1.36.2    30 Aug 2026</code> while <code>version</code> says <code>1.36.1</code> and the section now holds 2 Feature + 16 Change + 6 Security entries — it must be re-labelled <strong>1.37.0</strong> with the actual release date, or the changelog contradicts the version and the policy. (Still true at the 2026-09-28 tip <code>d4c8558f</code>.)</p>
+<p>Static-request issues — state moved since 2026-09-17:</p>
+<ul><li><strong>#355 CLOSED</strong> (a range served as identity to a client that refused identity)</li><li><strong>#390 CLOSED</strong> (a file below min_length served as identity to a client that refused it)</li><li><strong>#356 OPEN</strong> (ETag cannot see a same-size rewrite within one second)</li><li><strong>#391 OPEN</strong> (HEAD carries no content-coding headers)</li></ul>
+<p>Unreleased Security work that landed after 1.36.1 and needs its changelog wording (treated in <code>engineering/port-message-trust-model.md</code>): the router's port-message sender gate, PR <strong>#506</strong> (merged 2026-09-27) plus three follow-up commits (2026-09-27/28). It gates every type on the router main port through <code>nxt_router_gate_handler()</code>, leaves <code>RPC</code> peer-binding, router-engine ports over the shared-memory queue, <code>DETACHED</code>, non-credential platforms and the dispatcher-level ACL open, and — per this repo's convention — a <code>*) Security:</code> entry has to name the affected releases, because the missing check shipped long before this cycle. Issue <strong>#341</strong> is still open with zero comments and no linked PR: annotate or close it when the release ships.</p>
+<h2>Consequences for the DrupalCon push</h2>
+<ul><li>Version anchor: do not name a version in the BoF submission; on the hand-out name</li></ul>
+<p><strong>1.37.0</strong> only once it is tagged.</p>
+<ul><li>The demo numbers were measured</li></ul>
+<p>on <strong>1.36.1</strong> — state the build, or re-measure before the conference.</p>
+<ul><li>Range + conditional requests are the most Drupal-relevant addition in this release</li></ul>
+<p>(media files, video, PDFs, cache revalidation of files served by the web server).</p>
+<ul><li><code>unitctl</code> dropping YAML/hjson/JSON5 is a second, independent reason the aspirational</li></ul>
+<p>BoF document's YAML workflow is unusable in public copy.</p>
+<h2>2026-10-11 correction (this supersedes the re-check block below)</h2>
+<p>The "2026-10-03 re-check" block was written from a stale local clone and a stale session date. Live truth (network clock + GitHub API, 2026-10-11):</p>
+<ul><li><strong>1.37.0 is released</strong>; <code>version</code> = 1.37.0 / 13700. The header defect described in</li></ul>
+<p>this doc is fixed in the released tree.</p>
+<ul><li>Live <code>CHANGES</code> top section: <strong><code>Changes with FreeUnit 1.37.1   04 Oct 2026</code></strong> —</li></ul>
+<p>21 Bugfix + 2 Change, no Security entries.</p>
+<ul><li>Live <code>master</code> = <code>4fef769d</code> (2026-10-11). Milestone 1.37.1: 16 open / 70 closed;</li></ul>
+<p>1.37.2: 4 open; 1.38: 14 open.</p>
+<ul><li>The release is worked through the workbench fork <strong><code>freeunitorg/freeunit-exp</code></strong></li></ul>
+<p>(bot issue #11, open PRs #25/#24/#23/#21/#5), not directly upstream.</p>
+<ul><li>Plan and role map: §5.</li></ul>
+<h2>2026-10-03 re-check (STALE — kept as record, numbers are from a clone 8 days behind)</h2>
+<ul><li>271 commits since the <code>1.36.1</code> tag (the 09-17 note said 152).</li><li>Entry tally in the unreleased top section: **12 Security / 24 Change / 5 Feature /</li></ul>
+<p>45 Bugfix** (was 6/16/12/2).</p>
+<ul><li><code>version</code> file still reads <code>NXT_VERSION=1.36.1</code>, <code>NXT_VERNUM=13601</code> — needs</li></ul>
+<p><code>1.37.0</code> / <code>13700</code>.</p>
+<ul><li>The header defect is unchanged: the section still starts</li></ul>
+<p><code>Changes with FreeUnit 1.36.2   30 Aug 2026</code>.</p>
+<ul><li>Issue state: <strong>#341 still open with 0 comments</strong>; <strong>#356 and #391 still open</strong>;</li></ul>
+<p>#355 and #390 remain closed.</p>
+<ul><li>Commit-vs-changelog sweep (token match, 270 non-merge subjects): only 6 candidates,</li></ul>
+<p>5 of them CI/test internals needing no entry; the single real candidate is <code>http: tidy the Vary token scan and its edges</code>. PR #509 did land the coverage.</p>
+<ul><li>Release plumbing to trigger: <code>release-docker.yml</code>, <code>unitctl.yml</code>, <code>build-deb.yml</code>,</li></ul>
+<p><code>build-distros.yml</code>.</p>
+<ul><li>Plan and role map.</li></ul>
+<script src="/freeunit-kb/assets/kb.js"></script>
+</body></html>

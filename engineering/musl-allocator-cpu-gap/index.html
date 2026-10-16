@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>engineering/musl-allocator-cpu-gap</title>
+<link rel="stylesheet" href="/freeunit-kb/assets/kb.css">
+</head><body>
+<nav class="crumbs"><a href="/freeunit-kb/index.html">index</a> / engineering/musl-allocator-cpu-gap</nav>
+
+<h1>engineering/musl-allocator-cpu-gap</h1>
+
+<h1>musl (Alpine) allocator CPU gap — 12–17% per request</h1>
+<p>Upstream report: <code>freeunitorg/freeunit#688</code> (opened at pin <code>8492d5ee</code>, 2026-10-13; <strong>kept open on purpose</strong> — the remaining items need the tracker). Workbench task: <code>freeunitorg/freeunit-exp#40</code>. Watcher: cron <code>76c80d0cdc88</code> (<code>freeunit-688-watch.py</code>, <code>15 <em>/6 </em> <em> </em></code>), state <code>/opt/data/state/freeunit-688-watch.json</code>.</p>
+<h2>The finding</h2>
+<p>FreeUnit on Alpine 3.24 (musl 1.2.6) costs <strong>12–17% more CPU per request</strong> than Debian 13 (glibc 2.41). All of the extra is <strong>system</strong> time; user time is equal within noise.</p>
+<table><thead><tr><th>workload</th><th>variant</th><th>user</th><th>system</th><th>total</th><th>faults</th></tr></thead><tbody><tr><td>hello arm64</td><td>Alpine</td><td>43.8</td><td>81.0</td><td>124.8</td><td>4.46 (router)</td></tr><tr><td>hello arm64</td><td>Debian</td><td>46.3</td><td>64.4</td><td>110.7</td><td>0.10 (router)</td></tr><tr><td>Drupal arm64</td><td>Alpine</td><td>3012</td><td>1220</td><td>4233</td><td>199.9 (app)</td></tr><tr><td>Drupal arm64</td><td>Debian</td><td>3274</td><td>496</td><td>3770</td><td>1.4 (app)</td></tr></tbody></table>
+<p>Independent re-run of the Drupal pair: <strong>11.7% less server time on Debian</strong>, 95% CI half-width 1.41%, null band 3.1%.</p>
+<p><strong>Mechanism.</strong> mallocng maps a <strong>group</strong> per size class and unmaps it when the last live slot in it is freed; glibc keeps freed chunks in its arena. A 4 KiB allocation therefore costs <code>mmap</code> + <code>munmap</code> plus its group's page faults. The 57 344-byte maps are <code>14 * 4096</code> — the group for the 4 KiB class, not "the 4096 cluster plus alignment". Kernel profile on Alpine: <code>do_user_addr_fault</code> 2.08%, <code>flush_tlb_mm_range</code> 1.70% (both below 0.4% on glibc).</p>
+<h2>The fix list (seven) and its state (2026-10-14)</h2>
+<table><thead><tr><th>#</th><th>fix</th><th>state</th></tr></thead><tbody><tr><td>1</td><td>per-thread cluster cache for pool clusters</td><td><strong>merged</strong> <code>cc94deb2d</code> (PR #693)</td></tr><tr><td>2</td><td>PHP SAPI opens the script once (<code>access()</code>, not <code>fopen()</code>)</td><td><strong>merged</strong> <code>1edda3a07</code> (PR #706) + <code>954fbc865</code> (PR #707)</td></tr><tr><td>3</td><td>return port read buffers to <code>port-&gt;free_bufs</code></td><td><strong>already in master</strong>; the bound was built and measured <strong>neutral</strong></td></tr><tr><td>4</td><td>request object inside the first pool cluster</td><td><strong>rejected</strong> — page-size variant measured, no change</td></tr><tr><td>5</td><td>Alpine packaging: jemalloc or mimalloc</td><td><strong>measured, not decided</strong></td></tr><tr><td>6</td><td>php-src: <code>closelog()</code> only after <code>openlog()</code></td><td><strong>reported</strong> php/php-src#24308</td></tr><tr><td>7</td><td>musl: skip the second <code>F_SETFD</code> after <code>open(O_CLOEXEC)</code></td><td><strong>closed</strong> — it is musl's own call</td></tr></tbody></table>
+<h3>Fix 1 — PR #693, merged <code>cc94deb2d</code> (2026-10-14)</h3>
+<ul><li>Router <code>mmap</code>/request falls <strong>39% arm64</strong> (0.82→0.50) and <strong>35% amd64</strong></li></ul>
+<p>(0.70→0.45); router page faults −41% / −36%; the router keeps 44–56 KiB more.</p>
+<ul><li><code>hello</code> arm64 116.9 → 111.3 µs: clears the 4.7 µs null band by ~1 µs — real</li></ul>
+<p>but small. On the shared amd64 host there is no CPU claim.</p>
+<ul><li><strong>Drupal: no change</strong> — the Drupal churn is not in the router (see below).</li><li>Cache caps: 32 total, 16 of one size.</li></ul>
+<h3>Fix 2 — PR #706 + #707, merged</h3>
+<p>Correction to the first text: on Alpine the pre-change script sequence was one <code>openat</code> plus <strong>two</strong> <code>fcntl(F_SETFD)</code>, not four; on glibc the same sequence has <strong>no <code>fcntl</code> at all</strong>, so the two builds differ in the sequence itself and "one fewer call" does not hold.</p>
+<h3>Fix 3 — already in master</h3>
+<p>Both read paths hand the buffer back (<code>src/nxt_port_socket.c:1973</code>, <code>:2283</code>). The missing bound was built (counter + <code>nxt_mp_free()</code> above four buffers) and measured <strong>neutral</strong>: 257 416 vs 256 624 kB tree VmHWM, 35 580 vs 35 584 kB cgroup <code>memory.peak</code>, faults 0.913 vs 0.878/req — inside the repeat spread. The list is bounded by messages in flight on the port, not by requests served.</p>
+<h3>Fix 4 — rejected</h3>
+<p><code>sizeof(nxt_http_request_t)</code> = 1592 (allocation block 1632 incl. the 40-byte <code>nxt_mp_block_t</code> header; 1600 with OTel; <strong>1576</strong> after PR #705 moved <code>num_inline_fields</code> in four router structures). It is above the 512-byte pool page, so <code>nxt_mp_alloc()</code> sends it to <code>nxt_mp_alloc_large()</code>. Bumping the pool page to 2048 changes nothing measurable: same memory, same faults, <code>mmap</code> 0.0008 per request in both builds. The page size is not the lever.</p>
+<h3>Fix 5 — allocator (the decision left)</h3>
+<p>The <strong>only</strong> thing that moves the Drupal gap (which lives in the PHP process / libsqlite3), and it must reach the <strong>router and the workers</strong>, not only PHP (<code>LD_PRELOAD</code>, or a linked allocator — the PHP worker is a fork of <code>unitd</code>).</p>
+<p><code>hello</code>, Alpine aarch64, 4 PHP workers, <code>wrk -t2 -c16 -d10s</code>, cgroup <code>cpu.stat</code>, µs/req total:</p>
+<table><thead><tr><th>allocator</th><th>median</th><th>spread</th><th>faults/req</th></tr></thead><tbody><tr><td>musl mallocng</td><td>74.2</td><td>66.6–81.7</td><td>0.99–1.21</td></tr><tr><td>jemalloc 5.3.0</td><td><strong>60.7</strong></td><td>58.9–62.2 (7 cells)</td><td>0.028–0.030</td></tr><tr><td>mimalloc v3.5.4 release (built)</td><td><strong>58.4</strong></td><td>45.8–63.3</td><td>0.025–0.030</td></tr><tr><td>mimalloc 2.2.7 / v3.5.4 secure (Alpine pkg)</td><td>62.1–62.9</td><td></td><td>0.023–0.031</td></tr></tbody></table>
+<ul><li><strong>Correction (2026-10-14):</strong> the Alpine package ships only mimalloc **2.2.7</li></ul>
+<p>secure<strong>; building </strong>v3.5.4 release<strong> from source gives the better median and best cells 24% below jemalloc, </strong>but<strong> the earlier "jemalloc recovers more than mimalloc" reading does </strong>not survive** the larger sample (mimalloc's spread is wider; the two are within noise in the alternating round).</p>
+<ul><li><strong>Drupal (8 workers):</strong> both close the reported gap and are **equal within</li></ul>
+<p>spread<strong> (jemalloc 3797–3960 µs, mimalloc 3833–3925 µs, against mallocng 4660–4709). The difference is in </strong>faults**: mimalloc 2.5–2.7/req vs jemalloc 17.1–18.9 vs mallocng 205.</p>
+<ul><li><strong>Memory is the price</strong> (Drupal, cgroup): mallocng frugal — anon 30 MB, peak</li></ul>
+<p>56–66 MB, ΣVmHWM 306–331 MB; jemalloc middle — anon 65–75 MB, peak 92–110 MB; mimalloc highest — anon 89 MB, peak 113–115 MB, ΣVmHWM 465 MB. mallocng is frugal <em>because</em> it hands memory back — the same behaviour that costs the faults.</p>
+<ul><li>Recommendation: <strong>jemalloc for predictability</strong>; mimalloc v3.5.4 release when</li></ul>
+<p>the best case matters and the spread is acceptable.</p>
+<ul><li>Packaging: <code>apk add jemalloc</code> + <code>LD_PRELOAD=/usr/lib/libjemalloc.so.2</code></li></ul>
+<p>(<code>/etc/conf.d/freeunit</code> or a Dockerfile <code>ENV</code>). Linking needs <code>--ld-opt="-Wl,--no-as-needed,-ljemalloc,--as-needed"</code> (a plain <code>-ljemalloc</code> is dropped silently by <code>--as-needed</code>). Alpine 3.24 ships jemalloc 5.3.0-r6.</p>
+<h3>Fix 6 — reported</h3>
+<p>php/php-src#24308: <code>PHP_RSHUTDOWN_FUNCTION(syslog)</code> calls <code>php_closelog()</code> unconditionally while <code>PG(have_called_openlog)</code> already tracks the state, so a worker opens a new <code>connect("/dev/log")</code> per request when <code>error_log = syslog</code>.</p>
+<h3>Fix 7 — closed, musl's own call</h3>
+<p>The extra <code>fcntl(F_SETFD, FD_CLOEXEC)</code> is <strong>musl's</strong>, not PHP's: <code>src/fcntl/open.c</code> repeats it after <code>__sys_open_cp</code> when <code>O_CLOEXEC</code> is passed (identical in v1.2.5 and v1.2.6); <code>syscall.h</code> already passes the caller's flags to <code>openat</code>, so the kernel sets the flag atomically and the <code>fcntl</code> repeats it. Measured in a fresh <code>alpine:3.22</code>: C <code>open(O_CLOEXEC)</code> = 1 <code>fcntl</code>, without <code>O_CLOEXEC</code> = 0, glibc = 0; PHP CLI on Alpine gives 7 / 8 / 57 for 0 / 1 / 50 userland <code>fopen</code>s. Cost ~0.8 µs each, 2–4/req — far below the gap, and deliberate in both releases → nothing to report.</p>
+<h2>Corrected cause of the Drupal gap</h2>
+<p>Every <code>mmap</code> in the PHP worker comes from <strong>libsqlite3</strong> (which <code>pdo_sqlite</code> opens and closes on each request), <strong>not</strong> from PHP or FreeUnit. This corrects the first text of the issue, where the source of the large maps was open. The <strong>12–17% headline still holds</strong> for the Drupal workload after fixes 1 and 2.</p>
+<p><strong>Static files (new, the biggest real-site cost):</strong> a 200 KiB file costs 158.6 µs on Alpine, 125.4 µs on Debian and 77.2 µs on Alpine with jemalloc — 1.85 <code>mmap</code> per response. glibc pays most of that cost too.</p>
+<p><strong>Read-buffer churn correction:</strong> the 16 KiB port-buffer churn comes only from response parts of <strong>15 bytes or less</strong>; the 5-byte <code>hello</code> is close to the worst case and a larger response part does not repeat it.</p>
+<h2>Split for the release window</h2>
+<ul><li><strong>1.37.1 (landed):</strong> fixes 1 and 2. The 1.37.1-slice items go in only if each</li></ul>
+<p>is green by 2026-10-24: copy small response parts (≤256 bytes) into the request pool; an opt-in per-thread cache slot for the request object.</p>
+<ul><li><strong>1.38:</strong> reuse of static-file and body buffers; the PHP script-open change is</li></ul>
+<p><strong>not</strong> a patch change (it moves <code>open_basedir</code> and the directory answers); a <code>./configure --malloc=</code> option; the remaining sanitizer hardening.</p>
+<ul><li><strong>Outside the repo:</strong> the Alpine package change to jemalloc, and a short note</li></ul>
+<p>for Alpine operators on the installation page. Not planned: a FreeUnit-owned <code>malloc</code> replacement.</p>
+<h2>Not verified</h2>
+<p>Drupal on MySQL or PostgreSQL; the PHP worker with other language modules; whether fixes 3/4 reach their estimated ~4 µs each on arm64 (only the call counts are measured); behaviour past 10 minutes. The arm64 and amd64 hosts were shared with other benchmarks at times; overlapping cells were repeated.</p>
+<h2>Related</h2>
+<ul><li><code>engineering/syscall-audit-kernel-requirements.md</code></li><li><code>engineering/cgroup-v2-isolation-performance-brief.md</code></li><li><code>engineering/fork-spawn-drupal-measurement.md</code></li></ul>
+<script src="/freeunit-kb/assets/kb.js"></script>
+</body></html>

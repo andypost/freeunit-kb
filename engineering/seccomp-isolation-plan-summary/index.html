@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>engineering/seccomp-isolation-plan-summary</title>
+<link rel="stylesheet" href="/freeunit-kb/assets/kb.css">
+</head><body>
+<nav class="crumbs"><a href="/freeunit-kb/index.html">index</a> / engineering/seccomp-isolation-plan-summary</nav>
+<p class="banner warn">DECIDED — maintainer approved all 4 deliverables</p>
+<h1>engineering/seccomp-isolation-plan-summary</h1>
+<table class="meta"><tr><th>source</th><td>https://gist.github.com/andypost/3ff355322648302bde6fafcff15b7e1e</td></tr><tr><th>scope</th><td>FreeUnit's syscall footprint vs Docker's default seccomp profile + Debian Trixie</td></tr></table>
+<h1>FreeUnit seccomp / Docker / Isolation — Plan Summary</h1>
+<p><strong>Source:</strong> https://gist.github.com/andypost/3ff355322648302bde6fafcff15b7e1e <strong>Status:</strong> DECIDED — maintainer approved all 4 deliverables <strong>Scope:</strong> FreeUnit's syscall footprint vs Docker's default seccomp profile + Debian Trixie</p>
+<hr>
+<h2>1. Key Findings</h2>
+<h3>1.1 FreeUnit uses fork(), not clone3()</h3>
+<pre><code>src/nxt_process.c:553 — pid = fork();  ← main spawn path
+src/nxt_process.c:470 — fork() inside nxt_process_unshare()  ← PID namespace double-fork
+src/nxt_process.c:1127 — fork() in daemonization helper</code></pre>
+<p><strong>No</strong> <code>clone(2)</code>, <code>clone3(2)</code>, <code>vfork()</code> used for spawning children. Zero hits for <code>clone3</code> or <code>SYS_clone3</code> across src/ and auto/.</p>
+<p><strong>Implication:</strong> FreeUnit cannot trigger the glibc-2.34 "silent clone3 fallback" class of failure that broke gVisor/Podman.</p>
+<p><strong>Verified D1</strong> on <code>debian:trixie</code> (glibc 2.41-12+deb13u3):</p>
+<pre><code class="language-c">// fork() under strace shows:
+clone(child_stack=NULL, flags=CLONE_CHILD_CLEARTID|CLONE_CHILD_SETTID|SIGCHLD, ...)
+// One syscall: clone. No clone3. No legacy fork(2) trampoline.</code></pre>
+<h3>1.2 Isolation uses unshare() after fork, not clone(CLONE_NEW*)</h3>
+<p>FreeUnit's <code>isolation</code> block applies namespaces via <code>unshare(2)</code> AFTER fork:</p>
+<pre><code class="language-c">// src/nxt_process.c:448
+ret = unshare(process-&gt;isolation.clone.flags);</code></pre>
+<table><thead><tr><th>Config key</th><th>Flag</th><th>Syscall</th></tr></thead><tbody><tr><td>credential</td><td>CLONE_NEWUSER</td><td>unshare</td></tr><tr><td>pid</td><td>CLONE_NEWPID</td><td>unshare</td></tr><tr><td>network</td><td>CLONE_NEWNET</td><td>unshare</td></tr><tr><td>uname</td><td>CLONE_NEWUTS</td><td>unshare</td></tr><tr><td>mount</td><td>CLONE_NEWNS</td><td>unshare</td></tr><tr><td>cgroup</td><td>CLONE_NEWCGROUP</td><td>unshare</td></tr></tbody></table>
+<p>Then mount/rootfs setup uses: <code>mount()</code>, <code>umount2()</code>, <code>pivot_root()</code>, <code>openat2()</code>, <code>chroot()</code>.</p>
+<p><strong>All of these are blocked by Docker's default seccomp profile.</strong></p>
+<h3>1.3 No app-level seccomp from FreeUnit</h3>
+<ul><li>Zero <code>prctl(PR_SET_SECCOMP, ...)</code> calls</li><li>Zero <code>seccomp(2)</code> syscall</li><li>Zero libseccomp linkage</li><li>The only <code>seccomp</code> string in C sources is a comment documenting the design choice</li></ul>
+<h3>1.4 What Docker's default profile blocks</h3>
+<table><thead><tr><th>Syscall</th><th>Docker default</th><th>FreeUnit needs</th></tr></thead><tbody><tr><td>mount</td><td>❌ Denied</td><td>✅ isolation with rootfs</td></tr><tr><td>umount2</td><td>❌ Denied</td><td>✅ isolation cleanup</td></tr><tr><td>pivot_root</td><td>❌ Denied</td><td>✅ isolation rootfs</td></tr><tr><td>unshare</td><td>⚠️ Needs CAP_SYS_ADMIN</td><td>✅ isolation namespaces</td></tr><tr><td>openat2</td><td>❌ Denied</td><td>✅ symlink-escape guard</td></tr><tr><td>clone3</td><td>✅ Allowed</td><td>❌ Not used (uses fork+clone)</td></tr><tr><td>personality</td><td>✅ Subset</td><td>❌ Not used</td></tr></tbody></table>
+<h3>1.5 Debian Trixie</h3>
+<ul><li><strong>D2 confirmed:</strong> Trixie does NOT restrict unprivileged user namespaces by default</li></ul>
+<p>(unlike Ubuntu 24.04+ with <code>apparmor_restrict_unprivileged_userns=1</code>)</p>
+<ul><li><code>kernel.unprivileged_userns_clone=1</code> (enabled since Debian 8/9)</li><li>Ships Linux 6.12 LTS</li><li>glibc <code>fork()</code> uses <code>clone</code>, not <code>clone3</code> (verified)</li></ul>
+<hr>
+<h2>2. Four Approved Deliverables</h2>
+<h3>2.1 Documentation (pkg/docker/README.md)</h3>
+<p>Add section "Running isolation under Docker" documenting:</p>
+<ul><li><code>isolation</code> needs <code>unshare</code>, <code>mount</code>, <code>umount2</code>, <code>pivot_root</code>, <code>openat2</code></li><li>All blocked by Docker's default seccomp</li><li><code>CAP_SYS_ADMIN</code> required (via <code>--cap-add=SYS_ADMIN</code>)</li><li>Two copy-paste recipes:</li><li><code>--privileged</code> (blunt, not recommended, disables all seccomp)</li><li><code>--cap-add=SYS_ADMIN --security-opt seccomp=/usr/share/unit/seccomp-isolation.json</code></li></ul>
+<h3>2.2 pkg/docker/seccomp-isolation.json</h3>
+<p>Ship a new seccomp profile (default-deny allow-list, opposite shape to existing <code>seccomp-no-af-alg.json</code>). Contains Docker's default allow-list PLUS:</p>
+<ul><li><code>mount</code>, <code>unshare</code>, <code>umount2</code>, <code>pivot_root</code>, <code>chroot</code>, <code>openat2</code></li></ul>
+<p><strong>Caveats:</strong></p>
+<ul><li>Profile alone does NOT grant capabilities — <code>--cap-add=SYS_ADMIN</code> still needed</li><li>Drift liability: must be resynced when Docker updates its <code>default.json</code></li><li>Test matrix: every <code>isolation.namespaces.*</code> subflag under this profile</li></ul>
+<h3>2.3 Code: EPERM Diagnostics + Fail-Fast</h3>
+<p>Replace generic <code>nxt_alert("mount() failed: %E")</code> with informative messages:</p>
+<pre><code>&quot;isolation: unshare() denied (EPERM) — this process needs CAP_SYS_ADMIN
+ and a seccomp/AppArmor policy permitting namespace/mount syscalls&quot;</code></pre>
+<p>Add respawn-loop protection: after 2-3 consecutive EPERM exits for the same app slot, stop retrying and escalate to a single fatal alert.</p>
+<h3>2.4 systemd .service hardening</h3>
+<p>Start as <strong>doc snippet</strong> (not default). Proposed directives:</p>
+<ul><li><strong>Safe:</strong> <code>ProtectKernelLogs=yes</code>, <code>ProtectHostname=yes</code>, <code>LockPersonality=yes</code></li><li><strong>Tricky (must preserve for isolation):</strong> <code>CapabilityBoundingSet=</code> (keep</li></ul>
+<p><code>CAP_SYS_ADMIN</code>), <code>RestrictNamespaces=</code> (allow <code>CLONE_NEW*</code>), <code>SystemCallFilter=</code> (include <code>mount</code>/<code>unshare</code>/<code>pivot_root</code>)</p>
+<ul><li><strong>Future:</strong> ship as defaults after testing on real isolation configs</li></ul>
+<hr>
+<h2>3. Open Items (need real hardware)</h2>
+<table><thead><tr><th>Gap</th><th>What's needed</th></tr></thead><tbody><tr><td>D1 glibc fork</td><td>Verify if Trixie's pinned glibc version changes</td></tr><tr><td>D2 Trixie userns</td><td>Real Trixie on bare metal / VM (not container sharing host's kernel)</td></tr><tr><td>7.3(ii) respawn protection</td><td>Design review + implementation in nxt_main_process.c</td></tr><tr><td>7.2 seccomp-isolation.json</td><td>Run test matrix on Docker/runc versions FreeUnit supports</td></tr><tr><td>7.4 systemd directives</td><td>Test with real isolation config on each target distro</td></tr></tbody></table>
+<script src="/freeunit-kb/assets/kb.js"></script>
+</body></html>

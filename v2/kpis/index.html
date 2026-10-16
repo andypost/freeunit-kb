@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FreeUnit v2 - KPIs and DoD</title>
+<link rel="stylesheet" href="/freeunit-kb/assets/kb.css">
+</head><body>
+<nav class="crumbs"><a href="/freeunit-kb/index.html">index</a> / v2/kpis</nav>
+<p class="banner warn">PoC - all KPIs met</p>
+<h1>FreeUnit v2 - KPIs and DoD</h1>
+<table class="meta"><tr><th>description</th><td>PoC success criteria and Definition of Done</td></tr><tr><th>tags</th><td>freeunit, v2, kpi, testing, poc</td></tr></table>
+<h1>FreeUnit v2 KPIs and Definition of Done</h1>
+<p>PoC considered successful on 4 vCPU / 8 GB RAM:</p>
+<h2>Throughput</h2>
+<p>Pool of 4 NTS workers, mixed load (50% async I/O, 50% CPU-bound: 1MB JSON parse). RPS + latency (p50/p99/p99.9) &gt;= PHP-FPM + FreeUnit v1.</p>
+<h2>Memory Efficiency</h2>
+<p>Pool RAM under high concurrency does not grow linearly.</p>
+<blockquote><p>= 3-5x better than FPM.</p></blockquote>
+<h2>Blast Radius</h2>
+<p>On hang: loss &lt;= 30 requests (semaphore size). detect to respawn &lt; 500 ms.</p>
+<h2>False-Positive Rate</h2>
+<p>&lt; 0.01% on test suite B1-B6.</p>
+<h2>Tests (B1-B6)</h2>
+<table><thead><tr><th>Test</th><th>Scenario</th><th>Expectation</th></tr></thead><tbody><tr><td>B1</td><td>sleep(2) in userland</td><td>SIGKILL in &lt;=250ms</td></tr><tr><td>B2</td><td>json_decode 10MB (~500ms CPU)</td><td>Do NOT kill, normal completion</td></tr><tr><td>B3</td><td>CPU-bound + checkpoints</td><td>Out-of-scope PoC</td></tr><tr><td>B4</td><td>Mixed: 1000 req, 1% sleep(5)</td><td>10 workers killed+respawn, rest alive, p99 degradation &lt; 50ms</td></tr><tr><td>B5</td><td>Multithread regression (noisy neighbor)</td><td>SIGKILL in &lt;=200ms</td></tr><tr><td>B6</td><td>TGID sanity: getmypid() == spawn_pid</td><td>Startup-check, reject on violation</td></tr></tbody></table>
+<h2>PoC Status: COMPLETE (2026-06-15)</h2>
+<ul><li>38/38 issues closed</li><li>76 tests green (+1 release-bench under #[ignore])</li><li>H1-H6 hypotheses proven on PHP 8.5.7 NTS</li><li>PoC development stopped</li></ul>
+<script src="/freeunit-kb/assets/kb.js"></script>
+</body></html>

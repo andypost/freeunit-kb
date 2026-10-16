@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>engineering/release-1.37.1-forecast</title>
+<link rel="stylesheet" href="/freeunit-kb/assets/kb.css">
+</head><body>
+<nav class="crumbs"><a href="/freeunit-kb/index.html">index</a> / engineering/release-1.37.1-forecast</nav>
+
+<h1>engineering/release-1.37.1-forecast</h1>
+
+<h1>FreeUnit 1.37.1 — cycle state and release forecast (checked 2026-10-09)</h1>
+<h2>State at check time</h2>
+<ul><li>master HEAD <code>0f1ec0b1</code> (2026-10-09 00:04 +0200) — "libunit: keep websocket frames in</li></ul>
+<p>order across a wait for a segment" (PR #573).</p>
+<ul><li>Since the 1.37.0 tag (2026-10-04 17:55 UTC): <strong>71 commits</strong>, <strong>52 merged PRs</strong></li></ul>
+<p>(#562–#636), net <strong>+8 352 / −1 268 over 152 files</strong>.</p>
+<ul><li>Churn split of the cycle: runtime C +2 443/−620 (33 files) · unit tests C +1 756/−65</li></ul>
+<p>(15) · integration tests Python +2 236/−72 (31) · unitctl +214/−156 (6) · docs/CI/meta +1 703/−355 (67). <strong>Tests are 47.8% of insertions.</strong></p>
+<ul><li><code>CHANGES</code> 1.37.1 section: <strong>15 entries — 14 Bugfix, 1 Change, 0 Security, 0 Feature</strong>.</li></ul>
+<p>The one Change is "--otel no longer needs OpenSSL" (PR #575); the bugfixes include the websocket frame-order fix, the control-API listener without pass/application, macOS 16 KiB pages, chunked_transform 400, state-dir <code>version</code> file with a trailing newline, wasm export/import crashes, <code>large_header_buffers</code> 8-bit counter, 64-bit <code>shm</code> cut to 32 bits, PHP stale cwd, unbounded timeouts in the control API, 32-bit gcc build, refused WHOAMI forever-wait.</p>
+<ul><li><code>version</code> file is still <code>1.37.0</code> (NXT_VERNUM=13700): the release commit has not been</li></ul>
+<p>made, so the cycle is open.</p>
+<ul><li>Open queue: <strong>35 PRs</strong> (14 labelled feature, 20 unlabelled, 1 bugfix, <strong>0 security</strong>) and</li></ul>
+<p><strong>53 issues</strong> (44 unlabelled, 7 bugfix, 1 feature, 1 infra).</p>
+<h2>Cadence measured</h2>
+<table><thead><tr><th>Cycle</th><th>days</th><th>commits</th><th>PR merged</th><th>insertions</th><th>commits/day</th></tr></thead><tbody><tr><td>1.36.0</td><td>48</td><td>139</td><td>56</td><td>19 034</td><td>2.9</td></tr><tr><td>1.36.1</td><td>42</td><td>99</td><td>69</td><td>12 993</td><td>2.4</td></tr><tr><td>1.37.0</td><td>36</td><td>314</td><td>211</td><td>76 250</td><td>8.7</td></tr><tr><td><strong>1.37.1 so far (4.8 d)</strong></td><td>4.8</td><td>71</td><td>52</td><td>8 352</td><td><strong>14.9</strong></td></tr></tbody></table>
+<p>The current patch cycle runs at roughly 6× the 1.36.1 rate: ~10.9 PR/day and ~1 750 inserted lines/day. CHANGES entries accumulate at ~0.29 per merged PR (15 entries / 52 PRs).</p>
+<h2>Forecast (hypotheses, not commitments)</h2>
+<ul><li><strong>Content</strong>: 1.37.1 ships as a bugfix patch — no Feature and no API/breaking Change is</li></ul>
+<p>in the section today, and the wasm/websocket/chunked fixes are the kind that a patch carries. Hypothesis: 20–30 CHANGES entries at the release commit, dominated by Bugfix, with 0–3 Security entries depending on whether the open 2026-10-03 audit items land.</p>
+<ul><li><strong>Volume at release</strong>, if the cycle closes inside the next 3–10 days (from the measured</li></ul>
+<p>rate, no plateau assumed): 95–140 commits, 65–95 merged PRs, +11 000–17 000/−1 500–3 000 lines, tests ≈45–50% of insertions.</p>
+<ul><li><strong>Date</strong>: earliest defensible date is 2026-10-11 (the "security fix ≤7 days" rule, 7 days</li></ul>
+<p>after 1.37.0); the realistic window is <strong>2026-10-12 … 2026-10-18</strong>, gated on the release steps that 1.37.0 needed (CHANGES date + version bump release commit, docs-site update, unitctl tag).</p>
+<ul><li><strong>Comparability</strong>: the 1.37.1 cycle is a patch cycle, so its churn cannot be compared to</li></ul>
+<p>1.37.0 (a batch-merge release day carrying 211 PRs); the useful comparison is 1.36.1.</p>
+<h2>The 1.37.x shortlist (checked 2026-10-11)</h2>
+<p>A patch release carries security and severe-regression fixes only. Inside that rule three open issues fit the line, each small enough for one review wave:</p>
+<ul><li><strong>#537</strong> — http: the body-read deadline restarts on every read, so a slow client</li></ul>
+<p>keeps a request alive indefinitely. Fix: one absolute deadline per request body.</p>
+<ul><li><strong>#538</strong> — http: route regexes are matched without PCRE2 match, depth or JIT-stack</li></ul>
+<p>limits. Fix: set the limits at match time; a configuration member is optional.</p>
+<ul><li><strong>#539</strong> — http: the concurrent-connection ceiling is a hardcoded 256. Fix: make</li></ul>
+<p>the limit a known, documented value.</p>
+<p>All three carry <strong>no label</strong> today; the label is what the release process reads, so labelling them is the first step. <strong>Attempted 2026-10-11 and blocked:</strong> the automation account (the GitHub App used for writes) is installed on <code>freeunitorg/freeunit-exp</code> only — <code>/installation/repositories</code> returns exactly one repository — so it gets 403 creating or applying a label in <code>freeunitorg/freeunit</code>. There is no <code>z-security</code> label in the main repository either. Two ways out: install the App on the main repository, or apply the labels by hand. Until then these three stay invisible to the release process; the shortlist itself is recorded in the release-train discussion (freeunit-exp #12) so it is not lost.</p>
+<p>Do not hold the 1.37.1 tag for them: ready inside the window they ride with 1.37.1, otherwise they take the next patch release alone.</p>
+<p><strong>#632</strong> (no 32-bit CI job) is infrastructure, not release content, but it guards the class that already produced two 32-bit bugfix entries in the 1.37.1 block (the <code>off_t</code> and the size-arithmetic fixes) — worth landing in the same window.</p>
+<p>Features that stay out of the 1.37 line: HTTP/2 stack (#463, #467, #470, #471, #479, #483, #484), router schedules (#452), USDT probes (#451), read-only status socket (#460), router match extensions (#461), opt-in PCRE2 JIT (#551).</p>
+<p>The same shortlist is public in <code>STREAMS.md</code> of <code>freeunitorg/freeunit-exp</code> (pull request 21), which is where the stream state lives now.</p>
+<h2>What is queued after 1.37.1 (1.38.0 staging)</h2>
+<p>Open feature PRs ~<strong>+35 200 insertions</strong> staged (TLS 1.3 work joins this window, priority stated 2026-10-11 — see <code>engineering/tls-1.3-and-kubernetes.md</code>): HTTP/2 over TLS stack (#463 stage 1, #467 stage 2, #470 stage 3, #471 fuzz target, #479 h2spec/docs, #483 trailer limits, #484 build flag), router schedules (#452), USDT probes (#451), read-only status socket (#460), router match on absent header/cookie/argument (#461), opt-in PCRE2 JIT (#551), Docker Drupal dev kit (#453), non-blocking perf gates (#449, #450), plus fresh infrastructure work from Oct 7–8 (#626 reproducible builds, #638 libunit response through the port queue, #643 CI job reduction, #645 libunit buffer shrink). Tracking issues #443, #596 (PHP worker mode and Rapira parity waves for 1.38.0) and #597 (performance/bug-fix track) are the declared homes for this scope.</p>
+<h2>Blockers and risks for 1.37.1</h2>
+<ul><li><strong>No Security entry yet</strong> while the 2026-10-03 audit issues stay open: #537 (body-rate</li></ul>
+<p>floor / slow-POST hold), #538 (PCRE2 limits → remote ReDoS), #539 (hardcoded 256 concurrent-connection ceiling), #540, #541. Hypothesis: either one of these lands and makes 1.37.1 a security patch, or the release ships as bugfix-only — which sits outside the stated "patch = security/DoS fixes only" policy and is worth an explicit decision.</p>
+<ul><li>#632: no CI job compiles a 32-bit target, so a 32-bit-only <code>-Werror</code> survived into 1.37.0;</li></ul>
+<p>the fix is in this cycle but the gate is still missing.</p>
+<ul><li>#624: <code>test_asgi_websockets_message_over_buffer_limit</code> hangs on s390x (blocking sendall,</li></ul>
+<p>no timeout) — a flaky-red risk for the release CI.</p>
+<ul><li>Release steps still pending: CHANGES date + <code>version</code> bump, docs-site/<code>changes.xml</code> polish</li></ul>
+<p>(the 1.37.1 stanza is still dated 2026-10-04 with an empty-looking revision), unitctl tag.</p>
+<ul><li>20 of 35 open PRs carry no label, and none carries a security label — triage visibility is</li></ul>
+<p>weaker than the queue size suggests.</p>
+<h2>Not verified</h2>
+<p>GitHub security advisories / GHSA drafts were not read: the GitHub token is read-only without the <code>security_events</code> scope. Colour/scope statements above come from labels, PR titles and <code>CHANGES</code> text, not from advisory data.</p>
+<h2>Method</h2>
+<p><code>git fetch origin --tags</code>, <code>git rev-list --count 1.37.0..origin/master</code>, <code>git diff --numstat 1.37.0..origin/master</code> bucketed by path family, <code>git show origin/master:CHANGES</code> section parse (entries up to the next "Changes with"), <code>git show origin/master:version</code>, <code>gh pr list --state open/merged --json ...</code> and <code>gh issue list --state open</code>. Tag boundaries use committer dates. Physical vs code-line definitions are in <a href="/freeunit-kb/engineering/code-volume-and-release-delta/index.html">code-volume-and-release-delta</a>.</p>
+<h2>State 2026-10-11 (refresh; supersedes the section above)</h2>
+<ul><li>master <code>4fef769d</code> ("test: name the descriptor kinds a leak assert found"); still **no</li></ul>
+<p>release commit** — <code>version</code> is <code>1.37.0</code> / <code>NXT_VERNUM=13700</code>.</p>
+<ul><li>Since the 1.37.0 tag: <strong>96 commits</strong>, ~69 merged PRs, 254 files, <strong>+14 189 / −1 698</strong>.</li><li><code>CHANGES</code> 1.37.1 section: <strong>23 entries</strong> (15 on 2026-10-09), section header still</li></ul>
+<p><code>04 Oct 2026</code>; 0 Security entries while the 2026-10-03 audit issues stay open.</p>
+<ul><li>Open queue: <strong>33 PRs</strong>, <strong>62 issues</strong>; milestone <strong>1.37.1 = 11 open PRs + 4 open issues</strong>,</li></ul>
+<p>due 2026-10-30.</p>
+<h3>What is left for 1.37.1</h3>
+<table><thead><tr><th>item</th><th>state</th></tr></thead><tbody><tr><td>#646 (tests, closes #625)</td><td>🟡 cleared: rebased on the merged #639, head <code>8cbd5b1c</code>, 27 checks pass — mergeable</td></tr><tr><td>#670 (closes #666), #671 (closes #667), #673, #659, #558</td><td>open, ready, <strong>no review note</strong> in the 2026-10-10/11 archive</td></tr><tr><td>#451 (USDT probes)</td><td>needs a changelog entry (feature) in <code>CHANGES</code> + <code>docs/changes.xml</code> — the only gap</td></tr><tr><td>#453 (Drupal core dev kit, draft)</td><td>pin the Composer SHA-256 as a literal (today the checksum is fetched from the same origin) + changelog</td></tr><tr><td>#638 (libunit port queue)</td><td>head moved past the review: +1819/−162 in 7 files, a third commit closes the missed drain-timeout finding, <code>test (node-26)</code> green → <strong>needs a fresh review</strong>, the old verdict does not cover it</td></tr><tr><td>#551 (PCRE2 JIT), #617 (macOS CI)</td><td>drafts</td></tr><tr><td>#647 (out-of-range level disables compression)</td><td>issue only, no PR</td></tr><tr><td>release mechanics</td><td><code>version</code> bump, <code>CHANGES</code> date, <code>changes.xml</code>, unitctl tag — all pending</td></tr><tr><td>open decisions</td><td>Security entry vs bugfix-only release (contradicts the "patch = security/DoS" policy); #632 (no 32-bit CI job — gate still missing); #624 (s390x) closed</td></tr></tbody></table>
+<h3>Performance track</h3>
+<p>The authoritative checklist is issue <strong>#597</strong> — waves 0 (1.37.1: s390x rerun + product-bug vs test-race decision, the 22 old unhyphenated ghcr tags), 4 (IPC cost in worker mode, K2 first) and 5 (measurement, <code>type: external</code> C app as the lab floor). <code>mp</code> junk fill is deliberately <strong>not</strong> in 1.37.1 (two runs inside the null band; branch kept, no PR). Outside the tracker: LTO/PGO <strong>parked</strong> (resume = rebase <code>build/lto-option</code>, run jobs 08/09/10, continue only if <code>r_instructions</code> leaves the 2.5% band), OTel-compiled-but-unconfigured job written but never run, the libunit message-cost branch (−14.4% vs master, local only, no PR), the 1.36.1→1.37.0 regression re-measure + bisect, PCRE2 JIT/limits (#551/#538/#545), and worker mode / Rapira parity (#596).</p>
+<script src="/freeunit-kb/assets/kb.js"></script>
+</body></html>

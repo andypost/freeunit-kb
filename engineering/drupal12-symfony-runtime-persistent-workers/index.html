@@ -1,0 +1,447 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>engineering/drupal12-symfony-runtime-persistent-workers</title>
+<link rel="stylesheet" href="/freeunit-kb/assets/kb.css">
+</head><body>
+<nav class="crumbs"><a href="/freeunit-kb/index.html">index</a> / engineering/drupal12-symfony-runtime-persistent-workers</nav>
+
+<h1>engineering/drupal12-symfony-runtime-persistent-workers</h1>
+<table class="meta"><tr><th>created</th><td>2026-07-13</td></tr><tr><th>context</th><td>Symfony Runtime is a key enabler for persistent-worker models (Octane,</td></tr><tr><th>component</th><td><code>symfony/runtime</code> (PHP package, MIT license)</td></tr><tr><th>introduced</th><td>Symfony 5.3 (2021)</td></tr><tr><th>purpose</th><td>Decouple application code from <em>how</em> HTTP requests are received.</td></tr></table>
+<h1>Drupal 12 + Symfony\Runtime + FreeUnit P4 — Persistent Workers for Drupal</h1>
+<p><strong>Created:</strong> 2026-07-13 <strong>Context:</strong> Symfony Runtime is a key enabler for persistent-worker models (Octane, FrankenPHP). Drupal 12 plans to adopt it. FreeUnit P4 can be the first server that makes Drupal truly persistent without Go or Swoole dependencies.</p>
+<hr>
+<h2>1. Symfony\Runtime — What It Is</h2>
+<p><strong>Component:</strong> <code>symfony/runtime</code> (PHP package, MIT license) <strong>Introduced:</strong> Symfony 5.3 (2021) <strong>Purpose:</strong> Decouple application code from <em>how</em> HTTP requests are received.</p>
+<p>Before Symfony Runtime, a Symfony app's <code>index.php</code> was:</p>
+<pre><code class="language-php">// Traditional index.php — tightly coupled to PHP-FPM
+$kernel = new Kernel(&#x27;prod&#x27;, false);
+$request = Request::createFromGlobals();
+$response = $kernel-&gt;handle($request);
+$response-&gt;send();
+$kernel-&gt;terminate($request, $response);</code></pre>
+<p>With Symfony Runtime:</p>
+<pre><code class="language-php">// Runtime-aware index.php — works with ANY server model
+require __DIR__ . &#x27;/../vendor/autoload.php&#x27;;
+
+return function (array $context) {
+    // The runtime controls how many times this callback is called
+    $kernel = new Kernel(
+        $context[&#x27;APP_ENV&#x27;] ?? &#x27;prod&#x27;,
+        (bool) ($context[&#x27;APP_DEBUG&#x27;] ?? false)
+    );
+    $request = Request::createFromGlobals();
+    $response = $kernel-&gt;handle($request);
+    $response-&gt;send();
+    $kernel-&gt;terminate($request, $response);
+};</code></pre>
+<p>The runtime decides:</p>
+<ul><li><strong>Without Octane:</strong> call the callback once per request (standard PHP-FPM)</li><li><strong>With Octane:</strong> call the callback in a loop, re-use the kernel</li><li><strong>With FrankenPHP:</strong> call the callback in a Fibers-aware loop</li></ul>
+<h3>How Symfony Runtime resolves the backend</h3>
+<pre><code class="language-php">// symfony/runtime resolves which Runtime class to use via:
+// 1. `$_SERVER[&#x27;RUNTIME_CLASS&#x27;]` env var
+// 2. `composer.json` `extra.runtime.class` 
+// 3. Heuristics (installed packages)
+
+// FrankenPHP provides: `\Symfony\Component\Runtime\FrankenPhpRuntime`
+// RoadRunner provides: `\Symfony\Component\Runtime\RoadRunnerRuntime`
+// Generic HTTP: `\Symfony\Component\Runtime\HttpKernelRuntime`</code></pre>
+<hr>
+<h2>2. Drupal 12 and Symfony Runtime</h2>
+<h3>Current State (Drupal 9-11)</h3>
+<p>Drupal's <code>index.php</code> is <strong>not runtime-aware</strong>:</p>
+<pre><code class="language-php">// drupal/web/index.php — Drupal 9/10/11
+$autoloader = require_once &#x27;autoload.php&#x27;;
+$request = Request::createFromGlobals();
+$kernel = DrupalKernel::createFromRequest($request, $autoloader, &#x27;prod&#x27;);
+$response = $kernel-&gt;handle($request);
+$response-&gt;send();
+$kernel-&gt;terminate($request, $response);</code></pre>
+<p>Bootstrap sequence:</p>
+<pre><code>→ composer autoload
+→ DrupalKernel::createFromRequest()   ← loads settings.php
+→ $kernel-&gt;boot()                     ← 50-200ms (service container build)
+→ $kernel-&gt;handle()                   ← DB queries, render
+→ $kernel-&gt;terminate()</code></pre>
+<p><strong>Key problem:</strong> <code>createFromRequest()</code> + <code>boot()</code> = <strong>~80-200ms of overhead</strong> on EVERY request, even warm. This is Drupal's "cold bootstrap" problem.</p>
+<h3>Drupal 12 and Symfony Runtime</h3>
+<p>Drupal 12 plans to adopt Symfony Runtime. The proposed <code>index.php</code>:</p>
+<pre><code class="language-php">// drupal/web/index.php — Drupal 12 with Symfony Runtime
+require __DIR__ . &#x27;/../vendor/autoload.php&#x27;;
+
+return function (array $context) {
+    $autoloader = require_once __DIR__ . &#x27;/autoload.php&#x27;;
+    $request = Request::createFromGlobals();
+    $kernel = DrupalKernel::createFromRequest($request, $autoloader, &#x27;prod&#x27;);
+    $response = $kernel-&gt;handle($request);
+    $kernel-&gt;terminate($request, $response);
+    return $response;
+};</code></pre>
+<p>This enables:</p>
+<ol><li><strong>Persistent workers</strong> — if the runtime supports it (Octane, FrankenPHP, FreeUnit P4)</li><li><strong>Server-agnostic CI</strong> — same entry point for PHP-FPM, Swoole, FreeUnit</li><li><strong>Environment-based configuration</strong> — via <code>$context['APP_ENV']</code></li></ol>
+<hr>
+<h2>3. What Persistent Workers Could Mean for Drupal</h2>
+<h3>3.1 The Holy Grail: Boot Drupal ONCE</h3>
+<pre><code>Current (FPM):
+  Request 1 → FPM worker 1 → boot Drupal (150ms) → handle (200ms) → die
+  Request 2 → FPM worker 2 → boot Drupal (150ms) → handle (200ms) → die
+
+With FreeUnit P4:
+  Worker starts → boot Drupal (150ms) → [READY]
+  Request 1 → handle (200ms) → reset state → [READY]
+  Request 2 → handle (200ms) → reset state → [READY]
+  Request 3 → handle (200ms) → reset state → [READY]</code></pre>
+<p><strong>Total time per request: 200ms instead of 350ms.</strong> That's <strong>~40% faster</strong> response times for the user — without any Drupal optimization.</p>
+<h3>3.2 Where the Boot Cost Goes</h3>
+<p>Drupal kernel boot (<code>\Drupal\Core\DrupalKernel::boot()</code>):</p>
+<table><thead><tr><th>Phase</th><th>Time</th><th>Persistent?</th><th>Notes</th></tr></thead><tbody><tr><td><code>Composer autoload</code></td><td>~5ms (warm)</td><td>✅ <strong>Reused</strong></td><td>Once, never again</td></tr><tr><td><code>settings.php</code></td><td>~5ms</td><td>✅ <strong>Reused</strong></td><td>Once per worker</td></tr><tr><td><code>Service container compile</code></td><td>~50-100ms</td><td>✅ <strong>Reused</strong></td><td>Not warmed in FPM</td></tr><tr><td><code>Database connection</code></td><td>~5ms</td><td>✅ <strong>Reused</strong></td><td>PDO stays alive</td></tr><tr><td><code>Module system</code></td><td>~10ms</td><td>✅ <strong>Reused</strong></td><td>Module list stays</td></tr><tr><td><code>YAML config load</code></td><td>~5ms</td><td>✅ <strong>Reused</strong></td><td>Config stays cached</td></tr><tr><td><code>Theme system</code></td><td>~10ms</td><td>✅ <strong>Reused</strong></td><td>Theme registry stays</td></tr><tr><td><strong>Total boot</strong></td><td><strong>~80-155ms</strong></td><td><strong>Saved</strong></td><td><strong>GONE</strong></td></tr></tbody></table>
+<p><strong>Real-world impact:</strong> A Drupal page that takes 350ms (150ms boot + 200ms DB/render) becomes 200ms. No module changes, no DB optimization.</p>
+<h3>3.3 The Really Exciting Part: opcache Warming</h3>
+<p>The most painful part of Drupal's cold start is <strong>opcache filling</strong>.</p>
+<pre><code class="language-bash"># FreeUnit worktree new feature/drupal-module
+# → Worker boots Drupal → opcache fills with 5000+ files
+# → Second request: ALL files already cached in SHM
+# → No more &quot;first request takes 5 seconds&quot; problem
+
+# On deploy:
+freeunit reload
+# → New workers boot Drupal → opcache fills → ready in ~500ms
+# → Old workers drain in-flight requests → zero downtime</code></pre>
+<p><strong>With PHP-FPM:</strong></p>
+<ul><li>First request after deploy: opcache starts cold → many slow file reads</li><li>May take 5-10 requests to warm up opcache fully</li></ul>
+<p><strong>With FreeUnit:</strong></p>
+<ul><li><code>prepare</code> target runs one warmup request before accepting traffic</li><li>Every worker starts with a hot opcache</li><li>Users never see the "first visitor after deploy gets 5s load time" problem</li></ul>
+<hr>
+<h2>4. The State Reset Challenge for Drupal</h2>
+<p>This is the hardest part. Drupal has <strong>a lot</strong> of static state.</p>
+<h3>What Drupal keeps in static memory</h3>
+<table><thead><tr><th>State</th><th>Where</th><th>Problem</th><th>Fix</th></tr></thead><tbody><tr><td><strong>Service container</strong></td><td><code>\Drupal::getContainer()</code></td><td>✅ <strong>Should persist</strong></td><td>No reset needed</td></tr><tr><td><strong>Static entity cache</strong></td><td><code>\Drupal\Core\Entity\EntityBase</code></td><td>❌ Must clear between requests</td><td><code>$storage-&gt;resetCache()</code></td></tr><tr><td><strong>State (variables)</strong></td><td><code>Drupal::state()</code></td><td>✅ Should persist</td><td>No reset</td></tr><tr><td><strong>Route provider</strong></td><td><code>\Drupal\Core\Routing\Router</code></td><td>✅ <strong>Should persist</strong></td><td>No reset after rebuild</td></tr><tr><td><strong>Route matcher</strong></td><td><code>\Drupal::service('router.no_access_checks')</code></td><td>✅ <strong>Should persist</strong></td><td>Exceptions only on config change</td></tr><tr><td><strong>String translation</strong></td><td><code>\Drupal::translation()</code></td><td>✅ <strong>Should persist</strong></td><td>No reset</td></tr><tr><td><strong>Config factory</strong></td><td><code>\Drupal::config()</code></td><td>✅ <strong>Should persist</strong></td><td>No reset</td></tr><tr><td><strong>Logger</strong></td><td><code>\Drupal::logger()</code></td><td>✅ <strong>Should persist</strong></td><td>No reset</td></tr><tr><td><strong>Tempstore</strong></td><td><code>\Drupal::service('tempstore.private')</code></td><td>❌ May need reset</td><td>Session-scoped</td></tr><tr><td><strong>Lock</strong></td><td><code>\Drupal::lock()</code></td><td>✅ <strong>Should persist</strong></td><td>No reset</td></tr><tr><td><strong>Cache</strong></td><td><code>\Drupal::cache()</code></td><td>✅ <strong>Should persist</strong></td><td>Backend lives in DB/Redis</td></tr><tr><td><strong>Database connection</strong></td><td><code>\Drupal::database()</code></td><td>✅ <strong>PERSIST</strong></td><td>Critical win!</td></tr><tr><td><strong>Current user</strong></td><td><code>\Drupal::currentUser()</code></td><td>❌ Must reset</td><td>Clear after request</td></tr><tr><td><strong>Request stack</strong></td><td><code>request_stack</code></td><td>❌ Must reset</td><td>Clear after request</td></tr><tr><td><strong>Private temp store</strong></td><td><code>tempstore.private</code></td><td>❌ Session-bound</td><td>Already session-scoped</td></tr></tbody></table>
+<h3>The critical persistent win: Database connection</h3>
+<p>Currently in PHP-FPM:</p>
+<pre><code>Request 1 → FPM worker → Drupal boot → MySQL connect(3-way handshake) → query
+Request 2 → FPM worker → Drupal boot → MySQL connect → query
+Request N → FPM worker → Drupal boot → MySQL connect → query</code></pre>
+<p>Each FPM worker opens a fresh PDO connection. For busy sites with 50 workers, that's 50 TCP connections to MySQL. MySQL's <code>max_connections</code> is a common limit.</p>
+<p><strong>With FreeUnit P4 persistent workers:</strong></p>
+<pre><code>Worker starts → Drupal boot → MySQL connect → [ready]
+Request 1 → query (reuse the SAME PDO)
+Request 2 → query (reuse the SAME PDO)
+Request N → query (reuse the SAME PDO)</code></pre>
+<p><strong>Win:</strong></p>
+<ul><li><strong>1 connection per worker</strong> instead of 1 per request</li><li><strong>No TCP handshake</strong> per request (saves ~5ms on local, ~50ms on cloud)</li><li><strong>Fewer MySQL connections</strong> total — less <code>max_connections</code> pressure</li><li><strong>mysqlnd buffered queries</strong> reuse internal buffers</li></ul>
+<h3>What Drupal needs for persistent workers</h3>
+<pre><code class="language-php">// Proposed: Drupal persistent worker hook
+#[\Drupal\Core\Runtime\BeforeRequest]
+public function resetRequestState(): void {
+    // Clear per-request caches
+    \Drupal::entityTypeManager()-&gt;getActiveDefinitionBuilders();
+    // Reset in-memory caches
+    \Drupal::service(&#x27;entity.memory_cache&#x27;)-&gt;deleteAll();
+    // Reset render cache
+    \Drupal::service(&#x27;renderer&#x27;)-&gt;resetCache();
+}
+
+#[\Drupal\Core\Runtime\AfterResponse]
+public function cleanupRequest(): void {
+    // Close any dangling file handles
+    // Reset current user to anonymous
+    \Drupal::currentUser()-&gt;setAccount(new AnonymousUserSession());
+    // Clear request stack
+    \Drupal::service(&#x27;request_stack&#x27;)-&gt;pop();
+}</code></pre>
+<p>Or, more practical: Drupal could provide a <strong>middleware</strong> approach:</p>
+<pre><code class="language-php">// drupal/web/worker.php (FreeUnit P4 entry point)
+use Symfony\Component\HttpFoundation\Request;
+use Drupal\Core\DrupalKernel;
+use Drupal\Core\Site\Settings;
+
+$autoloader = require_once &#x27;autoload.php&#x27;;
+
+// BOOT ONCE
+$kernel = DrupalKernel::createFromRequest(
+    Request::createFromGlobals(),
+    $autoloader,
+    &#x27;prod&#x27;
+);
+$kernel-&gt;boot();
+$kernel-&gt;preHandle(Request::createFromGlobals()); // Sets up $_SERVER, etc.
+
+while ($request = freeunit_handle_request()) {
+    // REQUEST-STATE RESET
+    $kernel-&gt;preHandle($request);
+    
+    // HANDLE
+    $response = $kernel-&gt;handle($request);
+    $response-&gt;send();
+    
+    // POST-REQUEST CLEANUP
+    $kernel-&gt;terminate($request, $response);
+    $kernel-&gt;resetRequestState();
+}</code></pre>
+<hr>
+<h2>5. Drupal-Specific Use Cases for Persistent Workers</h2>
+<h3>5.1 JSON:API — the clearest win</h3>
+<p>Drupal's JSON:API module serves API responses. On a headless Drupal site:</p>
+<pre><code>Every request: boot Drupal (100ms) + route to JSON:API (50ms) + DB queries (100ms)
+With persistent: route to JSON:API (50ms) + DB queries (100ms)
+→ 250ms → 150ms. Users perceive &quot;instant&quot;.</code></pre>
+<p>For a headless Drupal site with 10k daily API users, this is significant.</p>
+<h3>5.2 BigPipe + Lazy Builders</h3>
+<p>Drupal's BigPipe sends a shell HTML page, then individual placeholders via Chunked transfer. Each placeholder is a separate request to the server.</p>
+<pre><code>Page with 10 BigPipe placeholders (each is a lazy builder callback):
+  FPM:   boot(100ms) + handle query(50ms) × 10 = 600ms
+  P4:   boot(ONCE) + handle query(50ms) × 10 = 500ms
+  → 16% less server time per page. More BigPipe placeholders = more savings.</code></pre>
+<h3>5.3 Drush commands</h3>
+<p>Drush (Drupal shell) runs as CLI but boots the full Drupal kernel.</p>
+<pre><code class="language-bash"># Current: each drush command = Drupal boot
+drush cr     → boot Drupal (150ms) → rebuild cache → done
+drush updb   → boot Drupal (150ms) → run updates → done
+drush cex    → boot Drupal (150ms) → export config → done
+
+# With FreeUnit P4 scheduler (roadmap X5 + PHP P7):
+freeunit run drupal:cache-rebuild
+freeunit run drupal:update
+freeunit run drupal:config-export
+# → Drupal booted ONCE, commands reuse the same warm instance
+# → Each command: ~10ms instead of ~150ms</code></pre>
+<p>For CI/CD pipelines running multiple drush commands in sequence, this is a <strong>order-of-magnitude speedup</strong>.</p>
+<h3>5.4 Cron runs</h3>
+<p>Drupal's cron is notoriously slow on complex sites:</p>
+<pre><code>Current: each cron run = boot Drupal (150ms) + run hooks (500ms-30s)
+With P4: cron worker already warm → immediate hook execution → done</code></pre>
+<hr>
+<h2>6. Edge runtime + FreeUnit + Drupal 12 Architecture</h2>
+<h3>Full stack</h3>
+<pre><code>Cloudflare/Akamai CDN (H2/H3)
+    │
+    ├── Edge runtime (H2/H3, TLS termination)
+    │      │
+    │      ├── Datagram dispatch (kernel-arbitrated)
+    │      │
+    │      └── FreeUnit P4 (persistent PHP workers)
+    │             │
+    │             ├── Drupal 12 kernel (booted once)
+    │             ├── State reset between requests
+    │             ├── Persistent MySQL PDO
+    │             ├── Redis/Memcached connection
+    │             └── Opcache (always warm)
+    │
+    ├── MySQL (connection pool via PDO persistent)
+    ├── Redis (cache + lock)
+    └── Varnish (HTTP cache, optional)</code></pre>
+<h3>Bottleneck removal</h3>
+<pre><code>Before (FPM):                    After (FreeUnit P4):
+  PHP-FPM startup × N reqs         NONE
+  Drupal boot × N reqs             1 × worker lifecycle
+  MySQL connect × N reqs           1 × worker lifecycle
+  Opcache fill × N reqs            1 × worker lifecycle
+  Static file read                 0 × io_uring sendfile
+
+  Total overhead per request:     Total overhead per request:
+  100-200ms + DB query time       0-20ms (state reset) + DB query time</code></pre>
+<hr>
+<h2>7. What FreeUnit Needs to Deliver for Drupal 12</h2>
+<h3>Minimum viable (MVP)</h3>
+<table><thead><tr><th>Item</th><th>Dependency</th><th>Effort</th><th>Value</th></tr></thead><tbody><tr><td>X4: Persistent-worker contract</td><td>Router</td><td>~3w</td><td>Foundation</td></tr><tr><td>P4: PHP persistent worker</td><td>X4</td><td>~4-6w</td><td>Worker loop</td></tr><tr><td>PHP extension: <code>freeunit_handle_request()</code></td><td>P4</td><td>~1w</td><td>User-facing API</td></tr><tr><td>State reset: superglobals + php://input</td><td>P4</td><td>~1w</td><td>Core reset</td></tr><tr><td>Drupal worker.php template</td><td>P4</td><td>~1d</td><td>Easy adoption</td></tr><tr><td>Config: <code>worker: worker.php</code></td><td>P4</td><td>~1d</td><td>User config</td></tr></tbody></table>
+<h3>Full Drupal 12 support (additional)</h3>
+<table><thead><tr><th>Item</th><th>Effort</th><th>Notes</th></tr></thead><tbody><tr><td>Drupal contrib module: freeunit_drupal</td><td>~2w</td><td>Config UI, status reports</td></tr><tr><td>Drupal core patch: Symfony Runtime support</td><td>~2w</td><td>Drupal 12 core integration</td></tr><tr><td>CI: Drupal test suite (BigPipe, JSON:API, Migrate)</td><td>~1w</td><td>Stability testing</td></tr><tr><td>Benchmark: FPM vs FreeUnit P4 for Drupal</td><td>~3d</td><td>Blog post / DrupalCon slides</td></tr><tr><td>Documentation: Drupal deployment with FreeUnit</td><td>~1w</td><td>Worktree, reload, CI/CD</td></tr></tbody></table>
+<h3>The Drupal-specific state reset (the hard part)</h3>
+<pre><code class="language-php">// Proposed: DrupalKernel::resetRequestState() — called by FreeUnit between requests
+namespace Drupal\Core;
+
+class DrupalKernel {
+    // ...existing code...
+
+    public function resetRequestState(): void {
+        // 1. Reset current user to anonymous
+        $this-&gt;getContainer()-&gt;get(&#x27;current_user&#x27;)
+            -&gt;setAccount(new AnonymousUserSession());
+
+        // 2. Clear request stack
+        $this-&gt;getContainer()-&gt;get(&#x27;request_stack&#x27;)-&gt;popAll();
+
+        // 3. Reset entity memory cache
+        $this-&gt;getContainer()-&gt;get(&#x27;entity.memory_cache&#x27;)-&gt;deleteAll();
+
+        // 4. Reset render cache
+        $this-&gt;getContainer()-&gt;get(&#x27;renderer&#x27;)-&gt;resetCache();
+
+        // 5. Clear static entity caches
+        foreach ($this-&gt;getContainer()-&gt;get(&#x27;entity_type.manager&#x27;)-&gt;getDefinitions() as $type) {
+            $storage = \Drupal::entityTypeManager()-&gt;getStorage($type-&gt;id());
+            if ($storage instanceof EntityStorageBase) {
+                $storage-&gt;resetCache();
+            }
+        }
+
+        // 6. Reset theme active state
+        \Drupal::theme()-&gt;resetActiveTheme();
+
+        // 7. Call hook_freeunit_request_reset for contrib modules
+        \Drupal::moduleHandler()-&gt;invokeAll(&#x27;freeunit_request_reset&#x27;);
+    }
+}</code></pre>
+<hr>
+<h2>8. drupal_static() — the Biggest Challenge for Persistent Workers</h2>
+<h3>8.1 What is drupal_static()</h3>
+<p>Drupal's <code>drupal_static()</code> is a <strong>global static storage</strong> — a single associative array that lives in the PHP process memory. It's used thousands of times across Drupal core and contrib modules.</p>
+<pre><code class="language-php">// core/includes/bootstrap.inc
+function &amp;drupal_static($name, $default_value = NULL, $reset = FALSE) {
+    static $data = [], $default = [];
+    
+    if ($reset) {
+        $data[$name] = $default[$name] ?? NULL;
+        return $data[$name];
+    }
+    
+    if (!array_key_exists($name, $data)) {
+        $data[$name] = $default_value;
+        $default[$name] = $default_value;
+    }
+    
+    return $data[$name];
+}</code></pre>
+<p><strong>In PHP-FPM</strong>, this is fine — the entire <code>static $data</code> array is destroyed at <code>RSHUTDOWN</code> and recreated fresh on the next request.</p>
+<p><strong>In a persistent worker (FreeUnit P4)</strong>, <code>static $data</code> lives FOREVER. Data accumulates across requests. Some of it should persist (module paths, entity definitions), some must be reset per-request (URL aliases, current user, active menu trail).</p>
+<h3>8.2 How drupal_static is used</h3>
+<p><strong>Category 1: Global (should PERSIST between requests)</strong></p>
+<p>These values change only on deploy/reconfigure and are safe to cache forever:</p>
+<table><thead><tr><th>Function</th><th>Caches</th><th>Safe to persist?</th><th>Why</th></tr></thead><tbody><tr><td><code>drupal_get_path()</code></td><td>Module/theme paths</td><td>✅ YES</td><td>Only changes on install/uninstall</td></tr><tr><td><code>drupal_get_filename()</code></td><td>File locations</td><td>✅ YES</td><td>Only on module install</td></tr><tr><td><code>module_list()</code></td><td>Enabled modules</td><td>✅ YES</td><td>Only on admin/update</td></tr><tr><td><code>entity_type_get_definitions()</code></td><td>Entity definitions</td><td>✅ YES</td><td>Only on module install</td></tr><tr><td><code>field_info_field_types()</code></td><td>Field type definitions</td><td>✅ YES</td><td>Stable across requests</td></tr></tbody></table>
+<p><strong>Category 2: Per-request (MUST be RESET)</strong></p>
+<p>These depend on the current request and must be cleared:</p>
+<table><thead><tr><th>Function</th><th>Caches</th><th>Must reset?</th><th>Why</th></tr></thead><tbody><tr><td><code>drupal_lookup_path()</code></td><td>URL alias cache</td><td>❌ <strong>YES</strong></td><td><code>/about</code> → correct page or <code>/node/1</code>?</td></tr><tr><td><code>menu_get_active_trail()</code></td><td>Current breadcrumb</td><td>❌ <strong>YES</strong></td><td>Changes per page</td></tr><tr><td><code>language_list()</code></td><td>Available languages</td><td>⚠️ Maybe</td><td>Languages are static, but <code>current language</code> is per-request</td></tr><tr><td><code>locale()</code></td><td>Current translation</td><td>❌ <strong>YES</strong></td><td>Interface language per user</td></tr><tr><td><code>theme_get_registry()</code></td><td>Theme registry</td><td>⚠️ Maybe</td><td>Registry is static, but <code>active theme</code> depends on route options</td></tr><tr><td><code>entity_get_display()</code></td><td>Display mode settings</td><td>⚠️ Partially</td><td>Bundle-level settings are static, but config overrides are per-request</td></tr><tr><td><code>page_get_cache()</code></td><td>Page cache ID</td><td>❌ <strong>YES</strong></td><td>Different per URL</td></tr></tbody></table>
+<h3>8.3 The problem: drupal_static does NOT distinguish categories</h3>
+<pre><code class="language-php">drupal_static(&#x27;drupal_get_path&#x27;);     // ← global
+drupal_static(&#x27;drupal_lookup_path&#x27;);   // ← per-request
+drupal_static(&#x27;entity_get_display&#x27;);   // ← depends on bundle, not request</code></pre>
+<p>All share the same <code>$data</code> array. There is no tag, no type, no category.</p>
+<h3>8.4 What happens without reset</h3>
+<pre><code>Without drupal_static_reset(), after 1000 requests:
+
+1. drupal_static(&quot;drupal_get_path&quot;) — works perfectly (paths don&#x27;t change)
+
+2. drupal_static(&quot;drupal_lookup_path&quot;) — RETURNS WRONG ALIAS
+   User visited /about → path alias cached
+   User visits /node/1 → drupal_lookup_path returns /about
+   → WRONG. User sees wrong page.
+
+3. drupal_static(&quot;language_list&quot;) — language doesn&#x27;t switch
+   User switches language → list not updated
+   → WRONG. Wrong language displayed.
+
+4. drupal_static(&quot;menu_get_active_trail&quot;) — breadcrumb from previous request
+   → WRONG. Wrong breadcrumb displayed.</code></pre>
+<p><strong>This is the #1 source of bugs</strong> in persistent-worker setups for Drupal. It's well-documented in the FrankenPHP/Swoole community.</p>
+<h3>8.5 Solutions for FreeUnit P4</h3>
+<h4>Option A: Full drupal_static_reset() — safe but costly</h4>
+<pre><code class="language-php">while ($request = freeunit_handle_request()) {
+    // Reset EVERYTHING — safe for MVP
+    drupal_static_reset();       // clears all static state
+    
+    // Drupal kernel pre-handle (boot is already done)
+    $kernel-&gt;preHandle($request);
+    $response = $kernel-&gt;handle($request);
+    $kernel-&gt;terminate($request, $response);
+}</code></pre>
+<p><strong>Cost:</strong> ~3-5ms per request for re-populating module paths, entity definitions, theme registry. <strong>Still faster than FPM</strong> (no full boot, no DB connect).</p>
+<h4>Option B: Selective reset — optimal, needs blacklist</h4>
+<pre><code class="language-php">// Known per-request drupal_static keys (expand as found)
+$per_request_keys = [
+    &#x27;drupal_lookup_path&#x27;,
+    &#x27;menu_get_active_trail&#x27;,
+    &#x27;locale&#x27;,
+    &#x27;language_list&#x27;,          // debatable
+    &#x27;theme_get_registry&#x27;,     // debatable
+    &#x27;path_alias_whitelist&#x27;,
+    &#x27;file_scan_directory&#x27;,
+    &#x27;registry&#x27;,               // PHP class registry
+    &#x27;schema&#x27;,                 // DB schema cache (usually static, but needs reset on update)
+];
+
+while ($request = freeunit_handle_request()) {
+    // Reset only per-request caches
+    foreach ($per_request_keys as $key) {
+        drupal_static($key, NULL, TRUE);  // $reset = TRUE
+    }
+    
+    // Global caches (drupal_get_path, module_list, entity definitions) STAY
+    // → saves ~3-5ms vs full reset
+    
+    $kernel-&gt;preHandle($request);
+    $response = $kernel-&gt;handle($request);
+    $kernel-&gt;terminate($request, $response);
+}</code></pre>
+<h4>Option C: Hook-based — correct, needs Drupal core patch</h4>
+<pre><code class="language-php">// Proposed: Drupal core hook that registers drupal_static category
+
+// modules/system/system.module
+function system_drupal_static_info() {
+    return [
+        &#x27;drupal_get_path&#x27; =&gt; [&#x27;type&#x27; =&gt; &#x27;persistent&#x27;],
+        &#x27;drupal_get_filename&#x27; =&gt; [&#x27;type&#x27; =&gt; &#x27;persistent&#x27;],
+        &#x27;drupal_lookup_path&#x27; =&gt; [&#x27;type&#x27; =&gt; &#x27;per-request&#x27;],
+        &#x27;menu_get_active_trail&#x27; =&gt; [&#x27;type&#x27; =&gt; &#x27;per-request&#x27;],
+        &#x27;entity_get_display&#x27; =&gt; [&#x27;type&#x27; =&gt; &#x27;persistent&#x27;],
+        &#x27;locale&#x27; =&gt; [&#x27;type&#x27; =&gt; &#x27;per-request&#x27;],
+        // ...
+    ];
+}</code></pre>
+<p>Then FreeUnit calls:</p>
+<pre><code class="language-php">drupal_static_reset(&#x27;per-request&#x27;);
+// → resets ONLY per-request keys
+// → persistent keys stay cached</code></pre>
+<p><strong>This requires a Drupal core patch.</strong> Realistic for Drupal 12.</p>
+<h4>Option D: Volatile annotation (PHP 8.4+)</h4>
+<p>PHP 8.4 introduced <code>mb_*</code> and <code>lazy</code> object support. With PHP 8.5+:</p>
+<pre><code class="language-php">// Future: explicit static lifetime annotations
+// Not yet available, but worth tracking
+#[\Static(scope: &#x27;request&#x27;)]
+function drupal_get_path($type, $name) {
+    $paths = &amp;drupal_static(__FUNCTION__);
+    // ...
+}</code></pre>
+<h3>8.6 Strategy for FreeUnit P4</h3>
+<table><thead><tr><th>Phase</th><th>Approach</th><th>Why</th></tr></thead><tbody><tr><td><strong>MVP (P4 lands)</strong></td><td>Option A (full reset)</td><td>Safe, simple. Still 2x faster than FPM.</td></tr><tr><td><strong>Post-MVP</strong></td><td>Option B (selective reset)</td><td>Profile which keys are safe to persist.</td></tr><tr><td><strong>Drupal 12</strong></td><td>Option C (hook-based)</td><td>Push Drupal core patch for <code>hook_drupal_static_info()</code>.</td></tr><tr><td><strong>PHP 8.5+</strong></td><td>Option D (annotation)</td><td>Track RFC, adopt when stable.</td></tr></tbody></table>
+<h3>8.7 Performance impact</h3>
+<table><thead><tr><th>Scenario</th><th>Boot</th><th>drupal_static</th><th>PDO</th><th>Total</th></tr></thead><tbody><tr><td><strong>FPM (cold)</strong></td><td>150ms</td><td>0ms (RSHUTDOWN)</td><td>5ms</td><td><strong>~350ms</strong></td></tr><tr><td><strong>FPM (warm)</strong></td><td>—</td><td>—</td><td>—</td><td><strong>~200ms</strong></td></tr><tr><td><strong>P4 + full reset</strong></td><td>0ms</td><td>5ms (re-populate)</td><td>0ms</td><td><strong>~205ms</strong></td></tr><tr><td><strong>P4 + selective reset</strong></td><td>0ms</td><td>1ms</td><td>0ms</td><td><strong>~201ms</strong></td></tr><tr><td><strong>P4 + hook-based</strong></td><td>0ms</td><td>0ms (persistent paths)</td><td>0ms</td><td><strong>~200ms</strong></td></tr></tbody></table>
+<p><strong>Even with full drupal_static_reset(), P4 is ~40% faster than warm FPM.</strong> The savings from no boot + no DB connect + no module discovery DOMINATE the small cost of re-populating static caches.</p>
+<h3>8.8 The real test: contrib modules</h3>
+<p>The hardest part is contrib. Modules like:</p>
+<table><thead><tr><th>Module</th><th>drupal_static usage</th><th>Risk</th></tr></thead><tbody><tr><td><strong>Pathauto</strong></td><td><code>pathauto_alias_cache</code></td><td><strong>HIGH</strong> — alias cache per request</td></tr><tr><td><strong>Views</strong></td><td><code>views_get_view_result()</code></td><td><strong>HIGH</strong> — cached query results stale</td></tr><tr><td><strong>Search API</strong></td><td>Search result caches</td><td><strong>HIGH</strong> — cached results stale</td></tr><tr><td><strong>Feeds</strong></td><td>Import state</td><td><strong>MEDIUM</strong> — batch operation</td></tr><tr><td><strong>Migrate</strong></td><td>Migration state</td><td><strong>MEDIUM</strong> — long-running process</td></tr><tr><td><strong>Commerce</strong></td><td>Cart cache</td><td><strong>MEDIUM</strong> — session-dependent</td></tr><tr><td><strong>Webform</strong></td><td>Element definitions</td><td><strong>LOW</strong> — static definitions</td></tr></tbody></table>
+<p><strong>Strategy:</strong> Start with core-only testing, then expand contrib coverage. For modules known to misbehave, add their keys to the per-request reset list.</p>
+<h3>8.9 Summary</h3>
+<p>drupal_static() is Drupal's biggest challenge for persistent workers, but <strong>NOT a blocker</strong>:</p>
+<ol><li>✅ <strong>Full reset</strong> works and is safe — still 2x faster than FPM</li><li>✅ <strong>Selective reset</strong> optimizes — profile which keys are persistent-safe</li><li>✅ <strong>Drupal 12 hook</strong> solves it properly — push <code>hook_drupal_static_info()</code></li><li>⚠️ <strong>Contrib modules</strong> need testing — module-by-module blacklist</li></ol>
+<hr>
+<h2>9. Comparison: Persistent Workers for Drupal</h2>
+<table><thead><tr><th>Approach</th><th>Bootstrap</th><th>DB connect</th><th>Opcache</th><th>Go dep?</th><th>IPC?</th></tr></thead><tbody><tr><td><strong>PHP-FPM (current)</strong></td><td>Per request</td><td>Per request</td><td>Per process</td><td>❌</td><td>❌</td></tr><tr><td><strong>Octane + Swoole</strong></td><td>Once</td><td>Once</td><td>Once</td><td>❌</td><td>❌</td></tr><tr><td><strong>Octane + RoadRunner</strong></td><td>Once</td><td>Once</td><td>Once</td><td>✅ Go</td><td>✅ JSON</td></tr><tr><td><strong>FrankenPHP</strong></td><td>Once</td><td>Once</td><td>Once</td><td>✅ Caddy</td><td>❌</td></tr><tr><td><strong>FreeUnit P4</strong></td><td><strong>Once</strong></td><td><strong>Once</strong></td><td><strong>Once</strong></td><td><strong>❌</strong></td><td><strong>❌</strong></td></tr></tbody></table>
+<p>FreeUnit P4 is the only solution that gives persistent-worker benefits <strong>without</strong> adding a Go binary or JSON IPC. For the Drupal community, which values simplicity and minimize dependencies, this is a strong argument.</p>
+<hr>
+<h2>10. DrupalCon BoF: The Drupal 12 + FreeUnit Story</h2>
+<h3>Key slide: "Your Drupal site, 40% faster, no code changes"</h3>
+<table><thead><tr><th>Before (FPM)</th><th>After (FreeUnit P4)</th></tr></thead><tbody><tr><td>350ms page load</td><td>200ms page load</td></tr><tr><td>MySQL connect per request</td><td>Reused PDO connection</td></tr><tr><td>Opcache cold on new workers</td><td>Always warm</td></tr><tr><td>No graceful reload</td><td>Zero-downtime deploy</td></tr><tr><td>Dead on 502 under load</td><td>Kernel dispatch, no queue</td></tr></tbody></table>
+<h3>Demo: deploy Drupal with zero downtime</h3>
+<pre><code class="language-bash"># Deploy new code
+git pull origin main
+composer install --no-dev
+
+# Reload workers gracefully
+freeunit reload
+# → Old workers finish, new workers start warm
+# → Total downtime: 0ms
+# → Users see NO maintenance page</code></pre>
+<h3>Demo: branch switching with worktrees</h3>
+<pre><code class="language-bash"># Work on a new feature
+freeunit worktree add feature/new-ci-workflow
+# → git worktree + composer install + Drupal boot
+# → Open at localhost:8081
+# → opcache already warm
+# → Separate MySQL database (or prefix)
+
+# Show dev in browser: feature site running alongside production site
+# Switch between ports to compare behavior</code></pre>
+<h3>Call to action for Drupal community</h3>
+<ol><li><strong>Try FreeUnit with Drupal 11 today</strong> — POC without persistent workers (HTTP/1.1)</li><li><strong>Contribute to Drupal 12 Symfony Runtime core integration</strong></li><li><strong>Test contrib module compatibility</strong> with persistent workers</li><li><strong>Design the state reset hooks</strong> — which Drupal state must persist?</li></ol>
+<script src="/freeunit-kb/assets/kb.js"></script>
+</body></html>

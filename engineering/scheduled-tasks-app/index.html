@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>engineering/scheduled-tasks-app</title>
+<link rel="stylesheet" href="/freeunit-kb/assets/kb.css">
+</head><body>
+<nav class="crumbs"><a href="/freeunit-kb/index.html">index</a> / engineering/scheduled-tasks-app</nav>
+
+<h1>engineering/scheduled-tasks-app</h1>
+<table class="meta"><tr><th>created</th><td>2026-08-31</td></tr><tr><th>context</th><td>Complement to <code>scheduled-tasks-plan.md</code> (daemon-internal). This is the <strong>app-level</strong> scheduler —</td></tr></table>
+<h1>FreeUnit App-Level Scheduler (cron-like) — research summary</h1>
+<p><strong>Created:</strong> 2026-08-31 <strong>Context:</strong> Complement to <code>scheduled-tasks-plan.md</code> (daemon-internal). This is the <strong>app-level</strong> scheduler — running user periodic tasks (drush cron, Laravel <code>artisan schedule:run</code>, Celery beat, Sidekiq, Django <code>manage.py</code>) INSIDE Unit, sharing the app's runtime, isolation, rootfs, cgroups, user, and OTel pipeline.</p>
+<h2>Two schedulers — don't conflate</h2>
+<table><thead><tr><th></th><th><code>scheduled-tasks-plan.md</code></th><th><strong>this</strong></th></tr></thead><tbody><tr><td>Task</td><td>daemon-internal (ACME renew, module swap, config re-apply)</td><td>user app tasks (cron, queue, purge)</td></tr><tr><td>Actions</td><td>built-in handlers only (no code exec)</td><td>arbitrary app cmd</td></tr><tr><td>Audience</td><td>FreeUnit self-service</td><td>app operator</td></tr><tr><td>Source</td><td>KB, 2026-08-22</td><td>roadmap <code>unit-cron.md</code></td></tr></tbody></table>
+<p>The "embed into all applications" question is about THIS one.</p>
+<h2>Target config (drush example)</h2>
+<pre><code class="language-json">{
+  &quot;applications&quot;: {
+    &quot;drupal&quot;: {
+      &quot;type&quot;: &quot;php&quot;, &quot;root&quot;: &quot;/var/www/drupal&quot;, &quot;user&quot;: &quot;www-data&quot;,
+      &quot;isolation&quot;: { &quot;namespaces&quot;: {&quot;mount&quot;: true,&quot;pid&quot;: true,&quot;network&quot;: false}, &quot;rootfs&quot;: &quot;/var/www/drupal&quot; },
+      &quot;schedules&quot;: [
+        {&quot;name&quot;: &quot;cron&quot;,         &quot;cmd&quot;: [&quot;vendor/bin/drush&quot;,&quot;cron&quot;],         &quot;every&quot;: &quot;5m&quot;, &quot;on_overlap&quot;: &quot;skip&quot;, &quot;timeout&quot;: &quot;5m&quot;},
+        {&quot;name&quot;: &quot;queue-default&quot;,&quot;cmd&quot;: [&quot;vendor/bin/drush&quot;,&quot;queue:run&quot;,&quot;default&quot;], &quot;every&quot;: &quot;1m&quot;, &quot;on_overlap&quot;: &quot;skip&quot;},
+        {&quot;name&quot;: &quot;nightly-purge&quot;,&quot;cmd&quot;: [&quot;vendor/bin/drush&quot;,&quot;cache:rebuild&quot;], &quot;at&quot;: &quot;0 3 * * *&quot;, &quot;timeout&quot;: &quot;30m&quot;}
+      ]
+    }
+  }
+}</code></pre>
+<p>One-shot via control API / unitctl:</p>
+<pre><code class="language-console">$ unitctl run drupal/cron
+$ curl -X POST --unix-socket /var/run/control.unit.sock \
+       http://localhost/control/applications/drupal/run \
+       -d &#x27;{&quot;cmd&quot;: [&quot;vendor/bin/drush&quot;,&quot;updb&quot;,&quot;-y&quot;]}&#x27;</code></pre>
+<p>Status: <code>/status/applications/&lt;app&gt;/schedules/&lt;name&gt;</code> → last_run / last_exit / duration / next_run / runs_total / failures_total.</p>
+<h2>Implementation angles (from roadmap unit-cron.md)</h2>
+<table><thead><tr><th>#</th><th>Approach</th><th>Pros</th><th>Cons</th><th>Verdict</th></tr></thead><tbody><tr><td>1</td><td><code>*-scheduler</code> process type (new SAPI)</td><td>clean separation, leak-proof</td><td>cold-start per fire, per-language duplication</td><td>fallback engine</td></tr><tr><td><strong>2</strong></td><td><strong>Controller/router scheduler + task callback</strong></td><td>ONE scheduler for ALL languages; warm interpreter; isolation inherited</td><td>libunit ABI bump; in-process side-effect risk</td><td>✅ <strong>recommended</strong></td></tr><tr><td>3</td><td>Sidecar synthetic HTTP</td><td>smallest diff, no SAPI changes</td><td>app must cooperate; auth surface; no raw subcommands</td><td>niche</td></tr><tr><td>4</td><td><code>POST /control/apps/&lt;name&gt;/run</code> external primitive</td><td>trivial, one PR, composable</td><td>punts scheduling</td><td>✅ Phase 1 path</td></tr></tbody></table>
+<h2>Recommended path: (4) → (2), with (1) as fallback</h2>
+<ul><li><strong>P1 — <code>/run</code> primitive</strong> (~1 week). POC: <code>POST /control/applications/&lt;name&gt;/run</code> spawns a one-shot worker reusing the app's isolation. Ships alone, validates spawn plumbing. ← MVP target for DrupalCon 28.09.</li><li><strong>P2 — In-process scheduler</strong> (~3-4 weeks): <code>schedules</code> array, cron parser (<code>nxt_cron.c</code>, Vixie subset ~300 LoC), timer wheel (<code>nxt_timer_t</code>), status API, overlap policies. Scheduler uses P1 primitive; falls back to (1) for SAPIs without task callback.</li><li><strong>P3 — Observability/lifecycle</strong> (~2 weeks): OTel span <code>scheduler.run</code>, retry backoff, overlap (<code>skip</code>/<code>queue</code>/<code>parallel</code>/<code>cancel_previous</code>), timeouts, stdout/stderr tagging, ring buffer.</li></ul>
+<h2>Why "all applications" (option 2) is the design rule</h2>
+<p><code>unit-maintainer.md</code>: <em>"features appearing in more than one language roadmap are implemented in router/controller/libunit first."</em> Scheduler lives in core (router/controller), not per-language. SAPIs just implement <code>nxt_unit_task_handler_t</code>.</p>
+<h2>Cross-cutting decisions</h2>
+<ul><li><strong>Schedule syntax:</strong> interval <code>"every": "30s|5m|1h"</code> (preferred/default), cron <code>"at": "<em>/5 </em> <em> </em> *"</code>, <code>@daily</code>, <code>@hourly</code>, <code>@reboot</code>, <code>"tz"</code> per-schedule.</li><li><strong>Time source:</strong> <code>nxt_timer_t</code>, not SIGALRM. Catch-up policy <code>"catchup": "none|one|all"</code>.</li><li><strong>Concurrency/overlap:</strong> <code>skip</code>(default), <code>queue</code>(max_queue), <code>parallel</code>(max_concurrent), <code>cancel_previous</code>(SIGTERM→SIGKILL). Per-schedule in-memory lock.</li><li><strong>Timeout:</strong> SIGTERM, grace (10s), SIGKILL. Exit code <code>timeout</code>.</li><li><strong>Isolation:</strong> task inherits the app's ENTIRE isolation block (same namespaces/rootfs/cgroup/user/seccomp) — the real selling point over host cron.</li><li><strong>Security:</strong> <code>run</code> requires same auth as mutating control API; rate-limit 10/min/app; env delta additive; never expose control socket to task.</li><li><strong>Auto env:</strong> drush <code>--uri</code>/<code>--root</code> auto-populated from config (fixes classic drush-cron footgun).</li><li><strong>Failure:</strong> retry <code>{attempts, backoff, max_delay}</code>, <code>on_failure</code> hook (pager/slack), backpressure <code>skipped_saturation</code>.</li><li><strong>Distributed:</strong> two Unit instances both fire same cron. MVP: "pick one host". Long-term <code>leader_election</code>.</li></ul>
+<h2>Risks (P2, not P1 blockers)</h2>
+<ul><li>libunit ABI bump (option 2) — coordination with every SAPI.</li><li>In-process side effects: leaked globals, opcache poisoning, fd drift.</li><li><code>processes: {max:1}</code> app → scheduled task blocks web (document; recommend separate worker-pool app sharing rootfs).</li><li>WASM/WASI task: cleanest first target for option 1 (tiny cold-start, no SAPI coupling).</li></ul>
+<h2>File layout if landed</h2>
+<p><code>src/nxt_scheduler.c/.h</code> (engine), <code>src/nxt_cron.c/.h</code> (parser), <code>src/nxt_controller.c</code> (+/run), <code>src/nxt_conf_validation.c</code> (+schedules), <code>src/nxt_status.c</code> (+schedules), <code>src/nxt_unit.c/.h</code> (+task callback), <code>src/nxt_php_sapi.c</code> (+impl), <code>test/test_scheduler.py</code>, docs.</p>
+<h2>Priority vs other plans</h2>
+<table><thead><tr><th>Plan</th><th>Relation</th></tr></thead><tbody><tr><td>ACME (PUT-overwrite)</td><td>daemon-internal scheduler enables auto-renew (separate, <code>scheduled-tasks-plan</code>)</td></tr><tr><td>Modular TLS</td><td>scheduler triggers module swap (separate)</td></tr><tr><td>Roadmap Phase B <code>/run</code></td><td>scheduler IS Phase B item</td></tr><tr><td>DrupalCon BoF</td><td>P1 <code>/run</code> POC = demo-able by 28.09; P2 full = SOON</td></tr></tbody></table>
+<script src="/freeunit-kb/assets/kb.js"></script>
+</body></html>

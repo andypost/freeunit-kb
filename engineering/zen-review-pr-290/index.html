@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>engineering/zen-review-pr-290</title>
+<link rel="stylesheet" href="/freeunit-kb/assets/kb.css">
+</head><body>
+<nav class="crumbs"><a href="/freeunit-kb/index.html">index</a> / engineering/zen-review-pr-290</nav>
+
+<h1>engineering/zen-review-pr-290</h1>
+
+<h1>zen-review PR #290 — main: store the state files atomically</h1>
+<p>_2026-09-08. Review of freeunitorg/freeunit#290. +899/−12, 12 files. Fixes #215. _APPRoved._</p>
+<h2>The bug (data loss)</h2>
+<p><code>nxt_main_file_store</code> accepted a <code>tmp_name</code> but did not use it — wrote into <code>file.name</code> (the LIVE <code>conf.json</code>) and called <code>rename(file.name, name)</code>, i.e. a rename onto itself. The short-write path did <code>nxt_file_delete(file.name)</code>, i.e. <strong>deleted the live <code>conf.json</code></strong>. An interrupted store left a truncated config (or none at all). The controller keeps <code>conf.json</code> as its only persistence.</p>
+<h2>The fix (textbook atomic write)</h2>
+<ul><li>Write into <code>tmp_name</code> (a sibling transient in <code>dir</code>, beside the destination).</li><li><code>nxt_file_sync(task, &amp;file)</code> (fsync) BEFORE the rename — so the rename doesn't</li></ul>
+<p>become visible with incomplete contents.</p>
+<ul><li><code>nxt_file_rename(tmp_name, name)</code> — atomic replacement.</li><li><code>nxt_file_dir_sync(task, dir)</code> AFTER the rename — without it the rename may not</li></ul>
+<p>survive a power loss. <code>EINVAL</code>/<code>EOPNOTSUPP</code> tolerated as not-a-store-failure (the rename has already happened; only a directory-refusing fsync).</p>
+<ul><li>Every failure BEFORE the rename: <code>nxt_file_delete(tmp_name)</code>, live <code>name</code> intact.</li><li><code>nxt_file_inherit</code> carries mode/ownership from the transient to the target.</li></ul>
+<h2>Verdict: APPROVE (unchanged after growth)</h2>
+<ul><li>Correct, textbook atomic-write ordering. Fixes the real data-loss (#215).</li><li>Known trade-off, documented: a <code>name</code> that was a symlink is replaced by a</li></ul>
+<p>regular file (the price of atomicity); a symlinked state <em>directory</em> still resolves. Honest.</p>
+<h2>New test coverage (the growth)</h2>
+<ul><li><code>test_state_store.py</code>: puts the state dir on a 64 KiB tmpfs (needs root +</li></ul>
+<p>CAP_SYS_ADMIN in a --privileged container, plus --restart; skips otherwise) and asserts a config too large for the filesystem leaves the ORIGINAL conf.json intact (observes the short-write unlink on the unfixed code). Well-targeted.</p>
+<ul><li><code>nxt_main_file_store_test.c</code> (C unit test), <code>test/syscalls/capture.sh</code> +</li></ul>
+<p>baseline drift additions (open/fsync/rename now in the syscall set).</p>
+<h2>Notes</h2>
+<ul><li>Fixes #215. The <code>file_store</code> core is bytes-identical to the reviewed</li></ul>
+<p>(+644) version; the delta is test-only (421-line C test + 141-line pytest).</p>
+<ul><li>Sibling: zen-review-pr-301 (discovery JSON), pr-299 (close-before-ack).</li></ul>
+<script src="/freeunit-kb/assets/kb.js"></script>
+</body></html>

@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>engineering/dependency-ci-hygiene</title>
+<link rel="stylesheet" href="/freeunit-kb/assets/kb.css">
+</head><body>
+<nav class="crumbs"><a href="/freeunit-kb/index.html">index</a> / engineering/dependency-ci-hygiene</nav>
+
+<h1>engineering/dependency-ci-hygiene</h1>
+
+<h1>Dependency &amp; CI hygiene — verified inventory (2026-09-16; CI state re-verified 2026-10-09)</h1>
+<p>Verified against <code>origin/master</code> <code>df9843b0</code> (2026-09-15) for the 2026-09-16 inventory, and re-verified against <code>origin/master</code> <code>0f1ec0b1</code> (2026-10-09) for the CI items below. A local checkout is often behind — re-verify (<code>git fetch</code>, <code>git ls-tree origin/master .github/workflows/</code>) before reusing any line below.</p>
+<h2>Build &amp; pinning</h2>
+<ul><li>Build system: <code>configure</code> (193 lines) + <code>auto/**</code> shell; the Makefile is</li></ul>
+<p>GENERATED (no <code>Makefile</code> and no <code>CMakeLists.txt</code> in the tree). CMake appears only inside tooling (node-gyp in the clang-ast job).</p>
+<ul><li>Bundled contribs are pinned per component: `pkg/contrib/src/{wasmtime,njs,</li></ul>
+<p>wasi-sysroot,libunit-wasm}/version<code> + </code>SHA512SUMS`; source tarballs come from packages.freeunit.org checksum-verified. Bumps are ordinary PRs (njs 1.0.0 → 1.0.1, #387).</p>
+<ul><li><code>pkg/eol.json</code> is the single source of truth: runtime/OS EOL with grace policy</li></ul>
+<p>(12 months runtimes / 36 months OS) PLUS a <code>dependencies</code> section documenting floor / floor_declared_by / tested_ceiling / source for openssl, tomcat, jetty, ecj, classgraph, wasmtime_c_api, wasmtime_crate. Read by <code>pkg/eol</code> and gated by <code>eol-check.yml</code>.</p>
+<ul><li>Compiler: <code>-Wall -Wextra -Werror</code> (auto/cc); <code>make E=0</code> disables.</li></ul>
+<h2>CI gates on master (<code>.github/workflows/</code>)</h2>
+<table><thead><tr><th>Workflow</th><th>What it gates</th></tr></thead><tbody><tr><td><code>audit.yml</code></td><td><code>cargo audit --deny warnings</code> over EVERY tracked <code>Cargo.lock</code> (list discovered via <code>git ls-files '*Cargo.lock'</code>, one matrix leg per lock) — PR on lock/toml change, push to master, weekly cron. Landed #399 (2026-09-15).</td></tr><tr><td><code>analysis-clang-ast.yml</code></td><td>Custom clang plugin (<code>freeunitorg/clang-ast</code>, branch <code>unit</code>) AST checks, then builds and RUNS the C unit-test suite (<code>./build/tests</code>), then every language module + wasmtime pinned from pkg/contrib.</td></tr><tr><td><code>sanitize.yml</code></td><td>ASan+UBSan matrix (python / php / go) over a named test subset, with <code>check-sanitizer-reports.sh</code> + <code>sanitizer-allowlist.txt</code> as the actual gate. <code>detect_leaks=0</code> is a documented follow-up; the go leg is experimental.</td></tr><tr><td><code>fuzzing.yml</code></td><td>In-tree libFuzzer targets; PR trigger on <code>src/nxt_http*</code>, <code>src/nxt_h1proto*</code>, <code>src/nxt_conf*</code>, <code>src/nxt_utf8*</code>, <code>src/nxt_controller*</code>, <code>configure</code>, <code>auto/<strong></code>, <code>fuzzing/</strong></code>. Supersedes the old OSS-Fuzz cifuzz workflow (gone from master).</td></tr><tr><td><code>security-seccomp.yml</code></td><td>AF_ALG seccomp mitigation vs the shipped Docker profile.</td></tr><tr><td><code>security-syscalls.yml</code></td><td>Syscall-drift baseline (advisory until a baseline is committed).</td></tr><tr><td><code>lint-whitespace.yml</code></td><td><code>git log --check</code> over the PR series; extended to run on pushes to master in the 1.37.1 cycle.</td></tr><tr><td><code>build-test.yml</code>, <code>build-distros.yml</code>, <code>build-deb.yml</code></td><td>Runtime/OS matrices, distro legs, packaging.</td></tr><tr><td><code>unitctl.yml</code>, <code>eol-check.yml</code></td><td>unitctl build+test (incl. musl / TLS-free leg) and the EOL policy check. Also on master: <code>build-test-macos.yml</code> (builds and runs the C tests on macOS) and <code>rust-version.yml</code> (builds every crate with its declared rust-version).</td></tr></tbody></table>
+<h2>Style tooling</h2>
+<ul><li><code>.editorconfig</code> + <code>.rustfmt.toml</code> (Rust only). NO <code>.clang-format</code>,</li></ul>
+<p><code>.clang-tidy</code> or cppcheck config anywhere in the tree, and no style target in the generated Makefile: C style is enforced by review, compiler warnings and clang-ast.</p>
+<ul><li>A whole-tree <code>clang-format</code> over ~133k lines of C would reformat against</li></ul>
+<p>several open PRs; only a changed-lines-only gate is cheap.</p>
+<h2>Linkage / module boundaries</h2>
+<ul><li>C core (<code>unitd</code>) + loadable per-runtime language modules (.so) + <code>libunit.a</code></li></ul>
+<p>linked into application processes (<code>NXT_LIB_UNIT_STATIC</code>, shipped by <code>libunit-install</code>). The Go binding includes only public <code>nxt_unit*.h</code>.</p>
+<ul><li><code>tools/unitctl</code> is Rust in its own cargo workspace (<code>unitctl</code>,</li></ul>
+<p><code>unit-client-rs</code>, <code>unit-openapi</code>), driving the control API over HTTP through the OpenAPI spec: zero link-time coupling to the C core, <code>Cargo.lock</code> committed, TLS behind a Cargo feature (#359).</p>
+<h2>Open items (verified live 2026-10-09, master <code>0f1ec0b1</code>)</h2>
+<p>Closed since the 2026-09-16 inventory:</p>
+<ul><li><strong>#400</strong> (contrib wasmtime pin four majors behind, "audited by nothing") —</li></ul>
+<p>CLOSED 2026-09-20 as completed; the contrib pin is <strong>48.0.5</strong> since 1.37.0.</p>
+<ul><li><strong>PR #99</strong> (Trivy filesystem vulnerability audit) — CLOSED 2026-10-04</li></ul>
+<p><strong>without merge</strong> (draft): the recorded decision is "no Trivy".</p>
+<ul><li><strong>dependabot</strong> now covers <code>github-actions</code> <strong>and <code>cargo</code></strong> — eight cargo</li></ul>
+<p>directories (tools/unitctl, src/otel, src/wasm-wasi-component, pkg/eol, four test fixtures), weekly, grouped (otel crates together, minor-and-patch as one group), <code>open-pull-requests-limit: 3</code>. Landed #565 and #570.</p>
+<ul><li><strong><code>pkg/eol.json</code> OpenSSL ACTION</strong> — done: <code>tested_ceiling</code> is now <strong>3.5.9</strong></li></ul>
+<p>(LTS, supported to 2030-04-08) plus <strong>4.0.3</strong> built with <code>-DOPENSSL_NO_DEPRECATED</code>; 3.6.5 was dropped before its 2026-11-01 upstream EOL (#613).</p>
+<p>Still open (CI):</p>
+<ul><li><strong>#632</strong> — no CI job compiles a <strong>32-bit target</strong>, so a 32-bit-only <code>-Werror</code></li></ul>
+<p>survived into the 1.37.0 release. The code fix is in the 1.37.1 cycle; the gate is still missing.</p>
+<ul><li><strong>#308</strong> — a leg wedged in the checkout post-step blocks every rerun on the PR.</li><li><strong>#402</strong> — the remaining Python-leg time is <strong>sleeping tests</strong>, not missing</li></ul>
+<p>parallelism (PR #657 cuts the sleeps in three python-leg files and fixes the shard table, open).</p>
+<ul><li><strong>#619</strong> — a size option of 2^31 or more has no defined value on a 32-bit build</li></ul>
+<p>(the conf counterpart of #632).</p>
+<ul><li><strong>#654</strong> — Tracking: the CI job shape, its cost and the rules that must survive a</li></ul>
+<p>change (opened 2026-10-10, follows the PR-job reduction #643).</p>
+<ul><li><strong>#655</strong> — ast-grep gate: rule widening and precision follow-up from #449.</li><li><strong>PR #617</strong> (draft) — run unitd and serve a request on macOS;</li></ul>
+<p><strong>PR #626</strong> (draft) — reproducible builds, phase 1.</p>
+<ul><li><strong>PR #471 / #479</strong> (draft) — libFuzzer target for the HTTP/2 frontend, and</li></ul>
+<p>h2spec + CI + docs (stages of the open h2 stack).</p>
+<ul><li>Merged in the cycle (were open on 2026-10-09): <strong>#449</strong> ast-grep baseline +</li></ul>
+<p>require-tests gates (now <code>lint-astgrep.yml</code> + <code>require-tests.yml</code>), <strong>#450</strong> (retitled/landed as <code>layout-check.yml</code> — shared-memory struct layout check), <strong>#637</strong>, <strong>#642</strong>, <strong>#643</strong>; <strong>#624</strong> closed by #641 ("make a stuck websocket test fail instead of hang").</p>
+<ul><li><strong>Style-gate decision still open</strong> — no <code>.clang-format</code>/<code>.clang-tidy</code>/cppcheck</li></ul>
+<p>config in the tree and no recorded "no".</p>
+<p>CI landed in the 1.37.1 cycle (since 1.37.0, all merged): whitespace lint on master pushes; build and run the C tests on macOS; "every version site agrees with the version file" check; Docker Rust pin agreement check; unitctl tag created on the commit the release tag points to; otel crates kept out of the dependabot minor-and-patch group; cargo dependabot; rust-version per crate with a CI check; wasm-wasi-component leg fails when all its tests skip; weekly Fedora/Alpine distro legs; apt and pytest steps bounded by time; gcc 16, clang 23 and the RHEL 8 floor in containers; OpenSSL 3.5 LTS in place of 3.6; seccomp run once per PR push and on release tags; unitctl on master pushes only when its paths change; mono and ccache steps removed; ubuntu-26.04 pinned; Fedora hardening-strict leg asserts the compiler and OpenSSL versions.</p>
+<h2>Verdict on "adopt the sibling project's dependency hygiene" (2026-09-16 proposal)</h2>
+<ul><li><strong>Already done:</strong> per-component pinned + checksummed contribs, <code>pkg/eol.json</code></li></ul>
+<p>as EOL/audit single source of truth, <code>cargo audit</code> over every lock, ASan+UBSan gate, libFuzzer PR gate, clang-ast AST gate, <code>-Wall -Wextra -Werror</code>, unitctl fully isolated from the C core.</p>
+<ul><li><strong>Misapplied to this stack:</strong> pinning "in Makefile/CMakeLists" (build is</li></ul>
+<p><code>configure</code> + <code>auto/</code>), "unitctl must not include deep internal headers / must link minimal shared libraries" (unitctl is Rust, no C linkage at all), valgrind/cppcheck/scan-build (already covered by the sanitizer gate + the clang-ast plugin), "avoid static linking of large components" (libunit.a is static by design for app processes).</p>
+<ul><li><strong>Real deltas (2026-10-09):</strong> dependabot <strong>gomod and docker</strong> ecosystems (cargo</li></ul>
+<p>and github-actions are covered now); the <strong>32-bit compile gate</strong> (#632) and the <strong>s390x hang</strong> (#624); a <strong>style-gate decision</strong> (changed-lines clang-format or a recorded "no"). Closed since the proposal: the unaudited contrib tarball (#400) and the Trivy decision (PR #99).</p>
+<script src="/freeunit-kb/assets/kb.js"></script>
+</body></html>
