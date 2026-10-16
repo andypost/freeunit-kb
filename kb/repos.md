@@ -26,7 +26,7 @@ tags: [freeunit, repos, github, forks]
 
 | Repository | Description |
 |------------|-------------|
-| freeunitorg/trueasync-experiment | TrueAsync experiments (v3) |
+| true-async/php-async | External PHP core extension (TrueAsync ABI). **No FreeUnit dependency**: the in-tree `#if NXT_PHP_TRUEASYNC` code path was REMOVED in 1.37.0 (commit b20aeb78). The old line `freeunitorg/trueasync-experiment` returns 404 — stale, do not cite. |
 
 ## Branch structure of andypost/unit
 

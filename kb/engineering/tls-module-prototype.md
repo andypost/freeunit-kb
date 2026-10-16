@@ -76,4 +76,5 @@ Two more facts worth keeping:
 
 ## Related
 
-- `engineering/http2-in-freeunit.md` — the h2 stack and its staging
+- `engineering/tls-1.3-and-kubernetes.md` — the 1.38 TLS scope this prototype feeds
+- `engineering/h3-research.md` — the `h3` ALPN token that couples this module to QUIC

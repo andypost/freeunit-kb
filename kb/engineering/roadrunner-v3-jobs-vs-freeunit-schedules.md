@@ -96,5 +96,4 @@ cron. The overlap is only **pool isolation** and **metrics/tracing**. The
 v3.0.0 does not offer. Useful as a design reference for #452 on two points:
 named worker pools (isolation by pipeline) and per-attempt outcome metrics.
 
-Related: `octane-roadrunner-frankenphp-research.md` (persistent-worker
-landscape), `scheduled-tasks-plan.md`, `scheduled-tasks-app.md`.
+Related: `scheduled-tasks-plan.md`, `scheduled-tasks-app.md`.

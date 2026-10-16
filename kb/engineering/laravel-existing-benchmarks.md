@@ -34,6 +34,5 @@ Before FreeUnit designs its own Laravel benchmark suite, the team must:
 
 ## Recommendation
 
-- Check the `octane-roadrunner-frankenphp-research.md` doc first (already in KB)
 - Scan GitHub for any Laravel benchmark repo with reproducible CI pipeline
 - If proposing a new FreeUnit Laravel benchmark, explain what gap it fills that existing benchmarks don't cover

@@ -298,7 +298,7 @@ the task links kTLS to "static".
 | OpenSSL floor | **1.1.1** (`auto/ssltls:48-67`, and the comment at :36-44 keeps it there for RHEL 8). **But** `SSL_sendfile` (the clean zero-copy TLS-static path) needs **OpenSSL ≥ 3.2**. So kTLS via `SSL_sendfile` would set a *second, higher* floor for kTLS users only — or FreeUnit drives `sendfile()` directly after `TLS_TX` is set, no `SSL_sendfile` needed (Linux kTLS offloads the socket; a plain `sendfile` to it works). **Recommendation: drive plain `sendfile()` post-`TLS_TX`, keep the 1.1.1 floor.** |
 | Kernel | kTLS needs `CONFIG_TLS`/`tls` module (Linux 4.13+; aarch64/uDP offload later). Must be probed at **build** (`auto/` similar to `auto/sendfile`) *and* at **runtime** (the module may be absent) — build probe alone is not enough. |
 | Ciphers | kTLS supports **AES-GCM-128/256, AES-CCM-128, ChaCha20-Poly1305, SM4** (SM4 needs ≥5.1 + crypto). Ciphers outside this set silently fail `TLS_TX` → must fall back to userspace. Config surfacing: an **explicit opt-in** `"tls": {"ktls": true}` on the listener (NOT auto-enable), because it changes cipher availability and the support matrix. |
-| **Multiprocess / SCM_RIGHTS** | **The real risk.** FreeUnit passes listening sockets main→router via `SCM_RIGHTS` (see `listener-socket-model`). A kTLS-enabled socket carries the `TLS_TX/TLS_RX` socket options and the per-socket crypto state in the *kernel*, tied to the socket. Two concerns: (a) the TX/RX transformation is installed **after** handshake, per accepted connection, so it is on the accepted fd, not the listening fd — `SCM_RIGHTS` of the listening socket is unaffected; (b) if any accepted connection fd is passed between processes (FreeUnit's router↔app uses the port/queue plane, not raw accepted sockets, for HTTP apps — but proxy peers and some paths may hold fds), the kTLS state travels with the fd, which is fine on Linux but must be **verified** — a `TLS_TX` socket that crosses a process boundary keeps its offload. **Handshake must still run in userspace** (kTLS has no userspace handshake API on the listen side without kTLS handshake offload, which is not in mainline). So the multiprocess model is *compatible* but the handshake→offload handoff must be per-connection. |
+| **Multiprocess / SCM_RIGHTS** | **The real risk.** FreeUnit passes listening sockets main→router via `SCM_RIGHTS`. A kTLS-enabled socket carries the `TLS_TX/TLS_RX` socket options and the per-socket crypto state in the *kernel*, tied to the socket. Two concerns: (a) the TX/RX transformation is installed **after** handshake, per accepted connection, so it is on the accepted fd, not the listening fd — `SCM_RIGHTS` of the listening socket is unaffected; (b) if any accepted connection fd is passed between processes (FreeUnit's router↔app uses the port/queue plane, not raw accepted sockets, for HTTP apps — but proxy peers and some paths may hold fds), the kTLS state travels with the fd, which is fine on Linux but must be **verified** — a `TLS_TX` socket that crosses a process boundary keeps its offload. **Handshake must still run in userspace** (kTLS has no userspace handshake API on the listen side without kTLS handshake offload, which is not in mainline). So the multiprocess model is *compatible* but the handshake→offload handoff must be per-connection. |
 | Handshake | kTLS offloads the **record layer only**; the handshake stays in userspace via OpenSSL (or an in-kernel handshake helper where available). FreeUnit's handshake already runs in the router process per connection — so the kTLS install step slots right after `nxt_openssl_conn_handshake` completes. |
 
 ### 5.4 kTLS integration plan (files)
@@ -432,9 +432,37 @@ Build probe and runtime capability API (step 2, capability layer) are in the tre
 `docs/exp/ktls-step2.md` for what is deliberately left out (key extraction, the `tls.ktls` opt-in,
 the `nxt_conn_io_t` swap, close_notify via `TLS_SET_RECORD_TYPE`, SCM_RIGHTS).
 
+## Review state of step 2 (recorded 2026-10-13)
+
+Two reviewers work this branch, and both found real defects, so their findings are worth
+carrying forward by number:
+
+| source | where | what it is |
+|---|---|---|
+| Codex (`chatgpt-codex-connector[bot]`) | PR comments on `freeunitorg/freeunit`, and on `freeunitorg/freeunit-exp` PR #30 | automated per-commit pass; on this branch it reviewed the capability layer and the key work |
+| The other side (Claude Opus 5.5) | `freeunitorg/freeunit-exp` PR #30 comments and issue #29 | the substantive reviews: a ten-finding review of `692bd126`, then checks of each fix commit |
+
+Findings and where they stand:
+
+| finding | subject | state |
+|---|---|---|
+| 1 | TLS 1.2 PRF left the label out of `A(0)` (RFC 5246 section 5) | fixed, vectors now from OpenSSL's `TLS1-PRF` (commit `647e210b`) |
+| 2 | TLS 1.2 vectors agreed with the code by construction | fixed (same commit) |
+| 3 | TLS 1.2 returned only the client key/IV; Unit is the server | fixed — the function takes the side |
+| 4 | Probe sentinel `-1` equals `NXT_ERROR`, so a failed probe was never cached | fixed |
+| 5 | Derived buffers not erased on return, including error paths | fixed (`ee700676`) |
+| 6 | Sequence 0 applies to a client TX key only; a server writes tickets first, TLS 1.2 starts at 1 | fixed in the comment |
+| 7 | Key block layout assumed a 4-byte fixed IV (RFC 7905 uses 12) | fixed — rejected, and the test asserts the rejection |
+| 8 | No function filling the `linux/tls.h` structures, no field-level test | **open** |
+| 9 | Includes before `nxt_main.h`, outside the guard | fixed |
+| 10 | Probe reports "not available" without saying which step failed | open |
+| nits | EEXIST comment, AF_INET-only loopback, `t[]` size | EEXIST comment and `t[]` fixed; IPv6 fallback still open |
+
+Not a review finding but measured here: the probe's own `install_tx()` never passed the salt, which
+is what the four `RECORD_LAYER_FAILURE` results were — the kernel's TLS 1.2 convention is
+`salt` = the derived fixed IV, `iv[8]` = any initial explicit nonce, `rec_seq` = 1 in network order.
+
 ## Related
-- `engineering/event-loop-alternatives.md`
 - `engineering/syscall-audit-kernel-requirements.md` (kernel-feature probe methodology)
 - `engineering/control-api-auth-d7.md` (control-plane TLS)
-- `references/listener-socket-model.md` (main→router `SCM_RIGHTS` handoff)
 - PRs: #370 (removed dead GnuTLS/CyaSSL/PolarSSL backends), #575/#639 (OTel/OpenSSL unlink, handshake-error logging)

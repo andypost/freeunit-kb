@@ -113,6 +113,4 @@ defense-in-depth, tracked, with the design step named.
 
 ## Related
 
-- `kb-freeunit/engineering/drupalcon-rotterdam-2026-promotion-plan.md` §5 (the
-  do-not-claim list this note adjusts).
 - `releases/1.37.0-in-flight-classification.md` — the actual pre-tag checklist.

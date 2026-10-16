@@ -76,5 +76,5 @@ enabled still gives the engine nothing inside the default container; it would ne
    RHEL kernel with sysctl 0 is POLL-capable. Version parsing gets both wrong.
 4. **The container is the real target for our Docker distribution.** Shipping an
    io_uring engine that needs `seccomp=unconfined` trades the container's main isolation
-   control for a parity-minus win (`io-uring-ab-benchmark-approach`: no scenario beat
-   epoll; `proxy_ka` −8.7% RPS / +11.3% CPU). Documented escape hatch, not a default.
+   control for a parity-minus win (no scenario beat epoll; `proxy_ka` −8.7% RPS
+   / +11.3% CPU). Documented escape hatch, not a default.

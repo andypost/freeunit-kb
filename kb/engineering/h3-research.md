@@ -73,4 +73,3 @@ numbers price the shape, not the cost.
 ## Related
 
 - `engineering/tls-module-prototype.md` — W1, verified module prototype
-- `engineering/http2-in-freeunit.md` — the h2 stack, staging and the D3 tension

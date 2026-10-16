@@ -262,10 +262,40 @@ made about the CPU-bandwidth or memory interface in threaded mode. Product quest
 remains: should a threaded `path` be accepted silently, or refused/warned about when the user's
 intent is evidently a limit?
 
+## 2e. Probe results — phase D, CLOSED: a threaded cgroup carries no limits (2026-10-11, live)
+
+Same stand class (Debian 13 Trixie, kernel 6.12.111, 3 vCPU), unitd 1.37.0, app = Python WSGI.
+
+**Control (domain target `/dom/app`)** — full interface present and writable:
+`memory.max max`, `cpu.max max 100000`, `pids.max max`, `cpu.weight 100`, `memory.current`,
+and `echo 64M > memory.max` accepted (`rc=0`).
+
+**Threaded target (`/thr/t`, `cgroup.type=threaded`)** — the interface is **absent**:
+the directory lists only `cgroup.*`, `cpu.pressure`, `cpu.stat`, `io.pressure`,
+`memory.pressure`. There is **no `memory.max`, no `cpu.max`, no `pids.max`, no
+`memory.current`, no `cpu.weight`, no `memory.oom.group`**, and an attempt to write any of
+them fails with **EACCES (errno 13)** — cgroupfs refuses to create a file the kernel does not
+expose there (a plain `open(O_CREAT)` on a nonexistent cgroup file returns EACCES, not ENOENT).
+The second threaded variant (`/thr2/t2`, also `threaded`) shows the identical empty interface.
+
+**Unit's behaviour is unchanged by that**: `PUT` → *Reconfiguration done*, the app starts,
+serves, and `/proc/<pid>/cgroup` reads `0::/thr/t` (and `0::/thr2/t2`), with the prototype and
+the app process in `cgroup.threads`. `unit.log` carries no refusal about the target; the only
+line in that window is a teardown artifact of the previous instance
+(`sendmsg(...) failed (32: Broken pipe)`), not a placement error.
+
+**Conclusion (the item is closed).** A user who points `isolation.cgroup.path` at a threaded
+cgroup gets a placed, running application and **no way to limit it** — the CPU, memory and pids
+interfaces do not exist in threaded mode, and Unit neither warns nor refuses. That is a product
+decision, not an open measurement: either the config should be refused/warned at validation
+(the operator's evident intent when naming a cgroup is to limit it), or the docs must state the
+limitation. Combined with §2c.1, the same silent-unenforceability now has two confirmed
+shapes: **relative path** (no interface because the parent enables nothing) and **threaded
+target** (no interface by kernel design).
+
 ## Related
 
 - `engineering/seccomp-isolation-plan-summary.md` — syscall policy half (decided)
-- `engineering/roadmap-active-work-weak-spots.md` — where a new stream slots in
 - `engineering/readiness-capget-rootfs.md`, `engineering/capget-fallback-plan.md` —
   adjacent isolation-side fixes
 - `engineering/fork-spawn-drupal-measurement.md` — the shared-opcache memory numbers

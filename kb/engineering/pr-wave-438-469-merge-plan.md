@@ -128,7 +128,7 @@ The stack is now four deep and strictly chained by base branch:
 that order or the next one needs a manual rebase.
 
 #463 contains #458+#459 in its branch; after those merge, its diff shrinks to the
-4 stage-1 commits. Full analysis: `engineering/http2-in-freeunit.md`.
+4 stage-1 commits.
 
 **Decisions before #463:** (a) adopt the nghttp2 build dependency (permanent:
 CI + deb/rpm); (b) the h1/h2 content-length divergence (h2 accepts a body without
