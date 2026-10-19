@@ -54,7 +54,9 @@ FreeUnit's general-purpose memory pools (`nxt_mp_t`) are explicitly **not thread
 Each zone owns a dedicated pre-allocated slab arena:
 - **Index:** Hash table with power-of-two buckets (default $2^{17} = 131,072$ buckets) for $O(1)$ key lookup.
 - **Node Freelist:** Pre-allocated pool of fixed-size nodes.
-- **Eviction:** When the node arena reaches capacity, an LRU/oldest `last_ms` eviction policy reclaims idle client nodes whose tokens have fully replenished (`tokens == 0`), preventing memory exhaustion under distributed IP scans.
+- **Eviction:** When the node arena reaches capacity, an LRU/oldest `last_ms` eviction sweep inspects candidate nodes. Because token updates occur lazily upon request arrival, an idle node's in-memory token count is not updated continuously. The eviction evaluator calculates effective tokens:
+  $$\text{tokens}_{\text{effective}} = \max(0, \text{node}\to\text{tokens} - (\text{now\_ms} - \text{node}\to\text{last\_ms}) \times R)$$
+  Any candidate where $\text{tokens}_{\text{effective}} = 0$ (or $\text{now\_ms} - \text{node}\to\text{last\_ms} \ge \frac{\text{capacity}}{R}$) has fully replenished its bucket and is safely reclaimed into the free list, preventing memory exhaustion under distributed one-shot IP scans.
 
 ---
 
@@ -66,12 +68,15 @@ The rate limiter implements a lazy, request-driven Continuous Leaky Bucket (GCRA
 Each tracked client node contains:
 ```c
 typedef struct nxt_rate_node_s {
-    uint32_t                    key;       /* Normalized IPv4 (4 bytes) */
+    struct nxt_rate_node_s     *next;      /* Hash collision chain link */
     uint32_t                    last_ms;   /* Timestamp of last request (ms) */
     uint32_t                    tokens;    /* Excess tokens in millitokens */
-    struct nxt_rate_node_s     *next;      /* Hash collision chain link */
+    uint16_t                    key_len;   /* Length of binary or string key */
+    uint16_t                    flags;     /* Alignment / state flags */
+    uint8_t                     key[];     /* Full key bytes (collision-safe) */
 } nxt_rate_node_t;
 ```
+For binary IPv4 (`$remote_addr`), `key_len = 4` (32-bit `in_addr_t`). For binary IPv6 (`$remote_addr`), `key_len = 8` (upper 64 bits `/64` subnet). For generic variables (cookies, headers, URI), `key_len` preserves the full string length, and keys are compared with `nxt_memcmp()` to guarantee collision-safe identity.
 
 ### 3.2 Zero-Syscall Monotonic Time
 FreeUnit caches the current monotonic clock in thread-local storage:
@@ -80,16 +85,22 @@ FreeUnit caches the current monotonic clock in thread-local storage:
 Evaluating `now_ms` requires **0 system calls** (`clock_gettime(CLOCK_MONOTONIC)` is bypassed).
 
 ### 3.3 Leak & Admission Arithmetic
-Let rate $R$ be defined in requests per second, and burst capacity $B$ in requests. All internal token accounting uses fixed-point millitokens ($1\text{ token} = 1,000\text{ millitokens}$):
+Let rate $R$ be defined in requests per second, and burst capacity $B$ in requests. All internal token accounting uses fixed-point millitokens ($1\text{ token} = 1,000\text{ millitokens}$).
 
+Total burst capacity includes the baseline request slot plus configured excess burst:
+$$\text{capacity} = (B + 1) \times 1,000\text{ millitokens}$$
+
+When a request arrives at `now_ms`:
 $$\Delta t = \text{now\_ms} - \text{node}\to\text{last\_ms}$$
 $$\text{leak} = \Delta t \times R$$
 $$\text{node}\to\text{tokens} = \max(0, \text{node}\to\text{tokens} - \text{leak})$$
 $$\text{node}\to\text{last\_ms} = \text{now\_ms}$$
 
-If $(\text{node}\to\text{tokens} + 1,000) \le (B \times 1,000)$:
+If $(\text{node}\to\text{tokens} + 1,000) \le \text{capacity}$:
 - **Admitted:** $\text{node}\to\text{tokens} += 1,000$; request proceeds.
 - **Rejected (429):** Token count is unmodified; request is throttled immediately.
+
+*(Note: When $B = 0$ by default, $\text{capacity} = 1,000\text{ millitokens}$, allowing steady-state admission of 1 request per $1/R$ second without false-positive 429 rejections on initial requests).*
 
 ---
 
@@ -131,7 +142,10 @@ FreeUnit allows route actions to re-enter the route chain up to 255 times (`r->p
 When rate threshold is exceeded:
 - **HTTP Status:** `429 Too Many Requests`.
 - **Status Enum:** Add `NXT_HTTP_TOO_MANY_REQUESTS = 429` to `nxt_http_status_t` (`src/nxt_http.h`).
-- **Response Headers:** Emits `Retry-After: <seconds>`, calculated as $\lceil \text{node}\to\text{tokens} / (R \times 1,000) \rceil$.
+- **Response Headers:** Emits `Retry-After: <seconds>`, calculated as the delay required for sufficient tokens to leak to admit the next request:
+  $$\text{excess} = (\text{node}\to\text{tokens} + 1,000) - \text{capacity}$$
+  $$\text{Retry-After} = \max\left(1, \left\lceil \frac{\text{excess}}{R \times 1,000} \right\rceil\right)$$
+  This accurately reflects the time until the next request slot is available, rather than waiting for the entire burst bucket to drain to zero.
 - **Response Body:** Small, static HTML/JSON payload explaining the rejection without invoking upstream handlers.
 - **Hammering Client Protection:** Rejected requests do not update `last_ms` backward, preventing malicious clients from resetting their penalty windows.
 
